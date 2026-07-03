@@ -7,6 +7,8 @@ from dataclasses import replace
 from drivetest.report import (
     Logger,
     SmartVerdict,
+    VerifyOutcome,
+    VerifyStatus,
     classify_smart,
     diff_smart,
     format_gib,
@@ -69,6 +71,28 @@ def test_real_report_stays_clean_when_unchanged():
 
     info = parse_smart_json(load_json("smart_nvme.json"))
     assert classify_smart(info, []) is SmartVerdict.CLEAN
+
+
+def test_verify_outcome_needs_attention():
+    assert not VerifyOutcome(VerifyStatus.PASS).needs_attention
+    assert not VerifyOutcome(VerifyStatus.SKIPPED).needs_attention
+    assert VerifyOutcome(VerifyStatus.FAIL).needs_attention
+    assert VerifyOutcome(VerifyStatus.OVERHEAT).needs_attention
+
+
+def test_verify_outcome_describe():
+    assert VerifyOutcome(VerifyStatus.PASS).describe() == "PASS"
+    assert VerifyOutcome(VerifyStatus.SKIPPED).describe() == "skipped"
+    partial = VerifyOutcome(VerifyStatus.PASS, partial=True, detail="parts 1-4 of 8")
+    assert partial.describe() == "PASS (parts 1-4 of 8 - not the whole drive)"
+
+
+def test_verify_status_maps_from_region_result_values():
+    # The two enums intentionally share values so one converts to the other.
+    from drivetest.fio import RegionResult
+
+    for rr in RegionResult:
+        assert VerifyStatus(rr.value).value == rr.value
 
 
 def test_format_gib():

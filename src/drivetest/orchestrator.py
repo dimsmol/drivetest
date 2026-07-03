@@ -32,7 +32,15 @@ from .fio import (
 from .planning import parse_only_spec, plan_regions, quick_region
 from .probe import gather_blank_probe, gather_root_info
 from .proc import Runner, SubprocessRunner
-from .report import Logger, SmartVerdict, classify_smart, diff_smart, format_gib
+from .report import (
+    Logger,
+    SmartVerdict,
+    VerifyOutcome,
+    VerifyStatus,
+    classify_smart,
+    diff_smart,
+    format_gib,
+)
 from .safety import (
     blocking_failures,
     check_identity_stable,
@@ -153,10 +161,10 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
     logger.log("")
 
     # --- write + verify ---------------------------------------------------
-    verify = "skipped"
+    verify = VerifyOutcome(VerifyStatus.SKIPPED)
     if options.write:
         verify = _write_phase(options, ctx, dev, logger, thermal, fio_runner, log_dir)
-        logger.log(f"   write/verify: {verify}")
+        logger.log(f"   write/verify: {verify.describe()}")
         logger.log("")
 
     # --- did the device survive? -----------------------------------------
@@ -180,7 +188,7 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
     # --- summary ----------------------------------------------------------
     peak = max(temps) if temps else None
     logger.log("== summary ==")
-    logger.log(f"write/verify : {verify}")
+    logger.log(f"write/verify : {verify.describe()}")
     logger.log(f"peak temp    : {peak} C")
     logger.log(f"SMART diff   : {verdict.value}")
     for d in deltas:
@@ -188,12 +196,11 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
     logger.log(f"full logs    : {log_dir}/")
     logger.log("")
 
-    bad_verify = verify in (RegionResult.FAIL.value, RegionResult.OVERHEAT.value)
-    if dev_gone or bad_verify or verdict is not SmartVerdict.CLEAN:
+    if dev_gone or verify.needs_attention or verdict is not SmartVerdict.CLEAN:
         if dev_gone:
             logger.log("RESULT: INCOMPLETE - device disconnected mid-run (likely thermal). "
                        "Cool it, replug, and resume with --only.")
-        elif verify == RegionResult.OVERHEAT.value:
+        elif verify.status is VerifyStatus.OVERHEAT:
             logger.log("RESULT: INCOMPLETE - stopped on temperature ceiling; "
                        "use more --parts (and/or a fan).")
         else:
@@ -258,8 +265,8 @@ def _guard_and_confirm(options: Options, ctx: RunContext, dev: Device, logger: L
 def _write_phase(
     options: Options, ctx: RunContext, dev: Device, logger: Logger,
     thermal: ThermalController, fio_runner: FioRunner, log_dir: Path,
-) -> str:
-    """Run the quick or paced full write+verify. Returns the verify result string."""
+) -> VerifyOutcome:
+    """Run the quick or paced full write+verify."""
     if options.quick:
         region = quick_region()
         logger.log(f">> write+verify (crc32c, first {format_gib(region.size)} quick); "
@@ -269,7 +276,7 @@ def _write_phase(
         else:
             result = RegionResult.OVERHEAT
         logger.log(f"   result: {result.value}")
-        return result.value
+        return VerifyOutcome(VerifyStatus(result.value))
 
     regions = plan_regions(dev.size, options.parts)
     selected = parse_only_spec(options.only, options.parts) if options.only else None
@@ -279,7 +286,7 @@ def _write_phase(
         f"ceiling {ctx.policy.ceiling_c} C, cool to {ctx.policy.cool_target_c} C before each"
     )
 
-    verify = "PASS"
+    status = VerifyStatus.PASS
     ran = 0
     for region in regions:
         if selected is not None and region.index not in selected:
@@ -288,7 +295,7 @@ def _write_phase(
         logger.log(f">> part {region.index}/{options.parts}  "
                    f"offset={format_gib(region.offset)}  size={format_gib(region.size)}")
         if not thermal.prestart_ok():
-            verify = RegionResult.OVERHEAT.value
+            status = VerifyStatus.OVERHEAT
             logger.log(f"   stopping before part {region.index} (too hot to start)")
             break
         result = fio_runner.run_region(
@@ -297,15 +304,16 @@ def _write_phase(
         ran += 1
         logger.log(f"   part {region.index}: {result.value}")
         if result is not RegionResult.PASS:
-            verify = result.value
+            status = VerifyStatus(result.value)
             logger.log(f"   stopping after part {region.index} ({result.value})")
             break
 
-    if verify == "PASS" and options.only:
-        verify = f"PASS (parts {options.only} of {options.parts} - not the whole drive)"
     if ran == 0:
         logger.log("   note: no parts ran")
-    return verify
+    # A --only subset that fully passed verifies only those parts, not the drive.
+    partial = status is VerifyStatus.PASS and options.only is not None
+    detail = f"parts {options.only} of {options.parts}" if partial else None
+    return VerifyOutcome(status, partial=partial, detail=detail)
 
 
 def _device_present(runner: Runner, dev: Device) -> bool:

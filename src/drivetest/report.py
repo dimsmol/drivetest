@@ -23,6 +23,40 @@ class SmartVerdict(StrEnum):
     UNKNOWN = "unknown (post-run SMART read failed - device may have dropped)"
 
 
+class VerifyStatus(StrEnum):
+    """Outcome of the write+verify phase (values shared with fio's
+    ``RegionResult`` so one converts to the other).
+    """
+
+    SKIPPED = "skipped"
+    PASS = "PASS"
+    FAIL = "FAIL"
+    OVERHEAT = "OVERHEAT"
+
+
+@dataclass(frozen=True)
+class VerifyOutcome:
+    """The write+verify result as data, not a formatted string.
+
+    ``partial`` marks a ``--only`` subset pass (the whole drive is verified only
+    once every part has passed across runs); ``detail`` carries the human note
+    for it, kept out of the control-flow state.
+    """
+
+    status: VerifyStatus
+    partial: bool = False
+    detail: str | None = None
+
+    @property
+    def needs_attention(self) -> bool:
+        return self.status in (VerifyStatus.FAIL, VerifyStatus.OVERHEAT)
+
+    def describe(self) -> str:
+        if self.partial and self.detail:
+            return f"{self.status.value} ({self.detail} - not the whole drive)"
+        return self.status.value
+
+
 @dataclass(frozen=True)
 class SmartDelta:
     """A worsened counter between the before/after SMART snapshots."""

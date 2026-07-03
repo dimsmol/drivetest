@@ -97,7 +97,7 @@ The import graph is acyclic and layered; `pyproject.toml` encodes the layering a
 Checks (all should be clean):
 
 ```bash
-PYTHONPATH=src pytest -q     # 115 tests
+PYTHONPATH=src pytest -q     # 118 tests
 ruff check src tests         # lint
 pyright                      # types (strict for src; tests relaxed - see pyproject.toml)
 lint-imports                 # layering / no import cycles (needs the dev extra)
