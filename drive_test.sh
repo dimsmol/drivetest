@@ -17,6 +17,7 @@ set -euo pipefail
 DO_WRITE=0
 QUICK=0
 FORCE=0
+PARTS=1
 DEV=""
 
 usage() {
@@ -24,34 +25,41 @@ usage() {
 drive_test.sh - health, integrity and performance test for an SSD.
 
 Usage:
-  sudo ./drive_test.sh [--write] [--quick] [--force] /dev/DEVICE
+  sudo ./drive_test.sh [--write] [--quick] [--force] [--parts N] /dev/DEVICE
 
   (no flags)  SMART health + read benchmarks only (non-destructive)
   --write     also run the full destructive write+verify pass (WIPES target)
   --quick     with --write, verify only the first 50G
   --force     allow --write to a non-blank disk (has partitions/signatures)
+  --parts N   split the full write+verify into N regions with a cooldown
+              between each. For passively-cooled USB enclosures that overheat
+              and disconnect during a sustained full-drive write. Default 1.
 
 Examples:
   sudo ./drive_test.sh /dev/sdb
   sudo ./drive_test.sh --write /dev/sdb
+  sudo ./drive_test.sh --write --parts 6 /dev/sdb
 EOF
   exit "${1:-0}"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --write)  DO_WRITE=1 ;;
-    --quick)  QUICK=1 ;;
-    --force)  FORCE=1 ;;
+    --write)   DO_WRITE=1 ;;
+    --quick)   QUICK=1 ;;
+    --force)   FORCE=1 ;;
+    --parts)   PARTS="${2:-}"; shift || true ;;
+    --parts=*) PARTS="${1#*=}" ;;
     -h|--help) usage 0 ;;
-    /dev/*)   [[ -z "$DEV" ]] || { echo "error: more than one device given ($DEV, $1)" >&2; usage 1; }
-              DEV="$1" ;;
+    /dev/*)    [[ -z "$DEV" ]] || { echo "error: more than one device given ($DEV, $1)" >&2; usage 1; }
+               DEV="$1" ;;
     *) echo "unknown argument: $1" >&2; usage 1 ;;
   esac
   shift
 done
 
 [[ -n "$DEV" ]] || { echo "error: no /dev/... target given" >&2; usage 1; }
+[[ "$PARTS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --parts needs a positive integer" >&2; usage 1; }
 [[ $EUID -eq 0 ]] || { echo "error: run as root (sudo)" >&2; exit 1; }
 
 # Canonicalize early: a by-id/by-path symlink must resolve to the real /dev node
@@ -62,7 +70,7 @@ DEV="$(readlink -f -- "$DEV")"
 
 # Check every external tool the script relies on, up front, and report all that
 # are missing at once. nvme-cli is only needed for an NVMe target.
-REQUIRED=(smartctl lsblk findmnt fio wipefs awk grep sed sort diff tail tee date mkdir readlink)
+REQUIRED=(smartctl lsblk findmnt fio wipefs blockdev awk grep sed sort diff tail tee date mkdir readlink)
 [[ "$DEV" == *nvme* ]] && REQUIRED+=(nvme)
 missing=()
 for t in "${REQUIRED[@]}"; do
@@ -220,23 +228,77 @@ get_temp() {
 }
 
 TEMP_LOG="$LOG_DIR/temperature.log"
-MON_PID=""
-start_temp_monitor() {
-  ( while true; do echo "$(date +%H:%M:%S) $(get_temp)"; sleep 5; done ) \
-    >>"$TEMP_LOG" 2>/dev/null &
-  MON_PID=$!
-}
-stop_temp_monitor() { [[ -n "$MON_PID" ]] && kill "$MON_PID" 2>/dev/null || true; MON_PID=""; }
 peak_temp() {
   [[ -f "$TEMP_LOG" ]] || { echo "n/a"; return; }
   awk '{print $2}' "$TEMP_LOG" | grep -oE '^[0-9]+$' | sort -n | tail -1 || echo "n/a"
 }
-trap 'stop_temp_monitor' EXIT
 
 # fio progress: emit an ETA/throughput line every 30s. --eta=always forces it
 # even though stdout is piped through tee (fio would otherwise stay silent until
 # done); --eta-newline prints full lines (not in-place \r) so tee passes them on.
 ETA_OPTS=(--eta=always --eta-newline=30s)
+
+# Thermal pacing, for passively-cooled USB enclosures that overheat on a
+# sustained full-drive write (see --parts):
+CEIL_TEMP=78       # halt a write region if the drive reaches this (C)
+COOL_TARGET=50     # between regions, idle until the drive cools to this (C)
+COOL_MAXWAIT=1200  # ...but never wait longer than this (s)
+
+# Kill any in-flight fio if the script exits/aborts, so Ctrl-C can't leave a
+# background write running against the device.
+CUR_FIO_PID=""
+cleanup() { [[ -n "$CUR_FIO_PID" ]] && kill "$CUR_FIO_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+
+gib() { awk -v b="$1" 'BEGIN{ printf "%.0fGiB", b/1073741824 }'; }
+
+# Run one write+verify region [OFFSET, OFFSET+SIZE), streaming live progress. A
+# foreground monitor samples temperature every 5s and appends it to TEMP_LOG; if
+# the drive reaches CEIL_TEMP, fio is killed to stop cleanly BEFORE the enclosure
+# hard-disconnects. Sets REGION_RESULT to PASS | FAIL | OVERHEAT.
+run_region() {
+  local off="$1" sz="$2" logf="$3" t fret overheat=0
+  fio --name=writeverify --filename="$DEV" --ioengine=libaio --direct=1 \
+      --bs=1M --iodepth=16 --rw=write --verify=crc32c --do_verify=1 \
+      --verify_fatal=1 --verify_state_save=0 \
+      --offset="$off" --size="$sz" --group_reporting "${ETA_OPTS[@]}" \
+      > >(tee "$logf") 2>&1 &
+  CUR_FIO_PID=$!
+  while kill -0 "$CUR_FIO_PID" 2>/dev/null; do
+    t="$(get_temp)"
+    echo "$(date +%H:%M:%S) ${t}" >>"$TEMP_LOG"
+    if [[ "$t" != "n/a" ]] && (( t >= CEIL_TEMP )); then
+      log "   !! ${t} C >= ${CEIL_TEMP} C ceiling - halting this region to avoid a disconnect"
+      kill "$CUR_FIO_PID" 2>/dev/null || true
+      overheat=1
+      break
+    fi
+    sleep 5
+  done
+  if wait "$CUR_FIO_PID"; then fret=0; else fret=$?; fi
+  CUR_FIO_PID=""
+  if   (( overheat ));   then REGION_RESULT="OVERHEAT"
+  elif (( fret == 0 )); then REGION_RESULT="PASS"
+  else                       REGION_RESULT="FAIL"; fi
+}
+
+# Idle until the drive cools to TARGET C, or MAXWAIT seconds pass.
+cooldown() {
+  local target="$1" maxwait="$2" waited=0 t
+  log "   cooldown: waiting for <= ${target} C (max ${maxwait}s)"
+  while (( waited < maxwait )); do
+    t="$(get_temp)"
+    echo "$(date +%H:%M:%S) ${t}" >>"$TEMP_LOG"
+    if [[ "$t" == "n/a" ]]; then
+      log "   cooldown: temperature unreadable - pausing 300s"; sleep 300; return
+    fi
+    if (( t <= target )); then
+      log "   cooldown: reached ${t} C after ${waited}s"; return
+    fi
+    sleep 20; waited=$(( waited + 20 ))
+  done
+  log "   cooldown: still ${t:-n/a} C after ${waited}s - continuing"
+}
 
 # --- 1. SMART baseline -----------------------------------------------------
 
@@ -259,18 +321,33 @@ if [[ $DO_WRITE == 1 ]]; then
   if is_mounted; then
     log "error: $DEV became mounted or unreadable - aborting write."; exit 1
   fi
-  SIZE_ARG=$([[ $QUICK == 1 ]] && echo "--size=50G" || echo "--size=100%")
-  log ">> write+verify (crc32c, $([[ $QUICK == 1 ]] && echo '50G' || echo 'full')) - this is the long one"
-  start_temp_monitor
-  if fio --name=writeverify --filename="$DEV" --ioengine=libaio --direct=1 \
-        --bs=1M --iodepth=16 --rw=write --verify=crc32c --do_verify=1 \
-        --verify_fatal=1 --verify_state_save=0 "$SIZE_ARG" --group_reporting "${ETA_OPTS[@]}" \
-        2>&1 | tee "$LOG_DIR/fio_writeverify.log"; then
-    VERIFY_OK="PASS"
+
+  if [[ $QUICK == 1 ]]; then
+    log ">> write+verify (crc32c, first 50G quick); ceiling ${CEIL_TEMP} C"
+    run_region 0 50G "$LOG_DIR/fio_writeverify.log"
+    VERIFY_OK="$REGION_RESULT"
+    log "   result: $REGION_RESULT (peak $(peak_temp) C)"
   else
-    VERIFY_OK="FAIL"
+    DEV_BYTES="$(blockdev --getsize64 "$DEV")"
+    part_size=$(( DEV_BYTES / PARTS / 1048576 * 1048576 ))
+    log ">> write+verify (crc32c, full) in ${PARTS} part(s); ceiling ${CEIL_TEMP} C, cooldown to ${COOL_TARGET} C between"
+    VERIFY_OK="PASS"
+    for (( i=0; i<PARTS; i++ )); do
+      off=$(( i * part_size ))
+      if (( i == PARTS-1 )); then sz=$(( DEV_BYTES - off )); else sz="$part_size"; fi
+      log ">> part $((i+1))/${PARTS}  offset=$(gib "$off")  size=$(gib "$sz")"
+      pstart="$(wc -l <"$TEMP_LOG" 2>/dev/null || echo 0)"
+      run_region "$off" "$sz" "$LOG_DIR/fio_writeverify_part$((i+1)).log"
+      ppeak="$(tail -n +$((pstart+1)) "$TEMP_LOG" 2>/dev/null | awk '{print $2}' | grep -oE '^[0-9]+$' | sort -n | tail -1)"
+      log "   part $((i+1)): ${REGION_RESULT} (peak ${ppeak:-n/a} C)"
+      if [[ "$REGION_RESULT" != "PASS" ]]; then
+        VERIFY_OK="$REGION_RESULT"
+        log "   stopping after part $((i+1)) (${REGION_RESULT})"
+        break
+      fi
+      if (( i < PARTS-1 )); then cooldown "$COOL_TARGET" "$COOL_MAXWAIT"; fi
+    done
   fi
-  stop_temp_monitor
   log "   write/verify: $VERIFY_OK"
   log ""
 fi
@@ -300,8 +377,13 @@ scrub() { grep -viE 'temperature|power_on|power on|local time|data units|host (r
 diff <(scrub "$LOG_DIR/smart_before.txt") <(scrub "$LOG_DIR/smart_after.txt") \
     >"$LOG_DIR/smart_diff.txt" || true
 
+# Only trust the diff if the post-run SMART was actually captured. If the device
+# had dropped (e.g. a disconnect), smart_after.txt holds an error, not a report -
+# say so rather than falsely reporting "clean".
 SMART_FLAG="clean"
-if grep -qiE 'reallocat|pending|uncorrect|media.error|crc.error|error (count|log)' \
+if ! grep -qiE 'serial number|model number|device model' "$LOG_DIR/smart_after.txt" 2>/dev/null; then
+  SMART_FLAG="unknown (post-run SMART read failed - device may have dropped)"
+elif grep -qiE 'reallocat|pending|uncorrect|media.error|crc.error|error (count|log)' \
      "$LOG_DIR/smart_diff.txt"; then
   SMART_FLAG="CHANGED - review smart_diff.txt"
 fi
@@ -315,9 +397,13 @@ log "peak temp    : $(peak_temp) C"
 log "SMART diff   : $SMART_FLAG"
 log "full logs    : $LOG_DIR/"
 
-if [[ "$VERIFY_OK" == "FAIL" || "$SMART_FLAG" != "clean" ]]; then
+if [[ "$VERIFY_OK" == "FAIL" || "$VERIFY_OK" == "OVERHEAT" || "$SMART_FLAG" != "clean" ]]; then
   log ""
-  log "RESULT: ATTENTION NEEDED - inspect logs above."
+  if [[ "$VERIFY_OK" == "OVERHEAT" ]]; then
+    log "RESULT: INCOMPLETE - stopped on temperature ceiling; use more --parts (and/or a fan)."
+  else
+    log "RESULT: ATTENTION NEEDED - inspect logs above."
+  fi
   exit 2
 fi
 log ""

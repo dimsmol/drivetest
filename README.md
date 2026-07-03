@@ -18,11 +18,18 @@ The enclosure caps at ~1 GB/s (USB 3.2 Gen 2), so test in two stages: integrity/
    ```
 3. Full destructive write/verify + health (wipes the drive; ~1.5-2.5 h):
    ```bash
-   sudo ./drive_test.sh --write /dev/sdX
+   sudo ./drive_test.sh --write --parts 8 /dev/sdX
    ```
    Use `--quick` (first 50G) for a fast sanity pass first.
 
 Pass = write/verify PASS, SMART diff clean, temp stayed under ~70 C.
+
+**Passive enclosures overheat on a sustained full write.** A continuous 2 TB write in a fanless USB enclosure (e.g. the Arion) climbs steadily past the drive's ~75-80 C throttle point and the bridge eventually drops off the bus - which fails the test with no integrity result. Two mitigations, combine as needed:
+
+- `--parts N` splits the write+verify into N regions with a cooldown between each, so heat never accumulates. Start with `--parts 8` for a passive enclosure. The script also enforces a hard temperature ceiling (78 C): if a region ever reaches it, fio is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
+- A **fan** on the enclosure is the real fix - even a cheap desk fan drops it several degrees and may let a single `--write` pass complete.
+
+Because of this thermal limit, the definitive full-speed write+verify is really Stage 2 (internal); the external pass mainly screens for a dead-on-arrival drive.
 
 ## Stage 2 - internal, in the M.2 slot
 
