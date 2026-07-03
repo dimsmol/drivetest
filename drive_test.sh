@@ -79,17 +79,30 @@ fi
 [[ "$(lsblk -dno TYPE "$DEV")" == "disk" ]] || {
   echo "error: $DEV is not a whole disk (looks like a partition)" >&2; exit 1; }
 
+# True if the disk (or any child) is mounted/swap, OR if its state cannot be
+# read. Fails CLOSED: an lsblk error counts as "unsafe" so we never write when
+# we cannot positively confirm the device is idle.
+is_mounted() {
+  local mnt
+  mnt="$(lsblk -nro MOUNTPOINT "$DEV" 2>/dev/null)" || return 0
+  [[ -n "${mnt//[[:space:]]/}" ]]
+}
+
 # Refuse if the device or any of its partitions is mounted.
-if lsblk -nro MOUNTPOINT "$DEV" | grep -q .; then
-  echo "error: $DEV (or a partition) is mounted - unmount first" >&2
-  lsblk "$DEV"; exit 1
+if is_mounted; then
+  echo "error: $DEV is mounted, or its state could not be read - unmount first" >&2
+  lsblk "$DEV" 2>/dev/null || true; exit 1
 fi
 
-# Refuse if this is the disk backing / (the running system).
-ROOT_SRC="$(findmnt -no SOURCE /)"
-ROOT_DISK="/dev/$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null || true)"
-if [[ "$ROOT_DISK" == "$DEV" ]]; then
-  echo "error: $DEV is the system disk (backs /). Refusing." >&2; exit 1
+# Refuse if this disk backs / (through any LVM/RAID/LUKS layers). lsblk -s walks
+# from the root source down to its physical parent disk(s), so this holds even
+# when / is on dm-crypt, LVM, or a multi-disk RAID.
+ROOT_SRC="$(findmnt -no SOURCE / 2>/dev/null || true)"
+if [[ -n "$ROOT_SRC" ]]; then
+  while read -r n; do
+    [[ "/dev/$n" == "$DEV" ]] || continue
+    echo "error: $DEV backs the running system (/). Refusing." >&2; exit 1
+  done < <(lsblk -nrso NAME "$ROOT_SRC" 2>/dev/null || true)
 fi
 
 # Refuse to WRITE to a disk that isn't blank, unless --force. A brand-new drive
@@ -211,8 +224,8 @@ if [[ $DO_WRITE == 1 ]]; then
     log "error: $DEV identity changed since confirmation - aborting write."
     log "       was: [$IDENT]  now: [$(dev_ident)]"; exit 1
   fi
-  if lsblk -nro MOUNTPOINT "$DEV" | grep -q .; then
-    log "error: $DEV became mounted - aborting write."; exit 1
+  if is_mounted; then
+    log "error: $DEV became mounted or unreadable - aborting write."; exit 1
   fi
   SIZE_ARG=$([[ $QUICK == 1 ]] && echo "--size=50G" || echo "--size=100%")
   log ">> write+verify (crc32c, $([[ $QUICK == 1 ]] && echo '50G' || echo 'full')) - this is the long one"
