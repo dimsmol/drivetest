@@ -233,6 +233,11 @@ peak_temp() {
 }
 trap 'stop_temp_monitor' EXIT
 
+# fio progress: emit an ETA/throughput line every 30s. --eta=always forces it
+# even though stdout is piped through tee (fio would otherwise stay silent until
+# done); --eta-newline prints full lines (not in-place \r) so tee passes them on.
+ETA_OPTS=(--eta=always --eta-newline=30s)
+
 # --- 1. SMART baseline -----------------------------------------------------
 
 log ">> SMART baseline -> $LOG_DIR/smart_before.txt"
@@ -259,7 +264,7 @@ if [[ $DO_WRITE == 1 ]]; then
   start_temp_monitor
   if fio --name=writeverify --filename="$DEV" --ioengine=libaio --direct=1 \
         --bs=1M --iodepth=16 --rw=write --verify=crc32c --do_verify=1 \
-        --verify_fatal=1 "$SIZE_ARG" --group_reporting \
+        --verify_fatal=1 --verify_state_save=0 "$SIZE_ARG" --group_reporting "${ETA_OPTS[@]}" \
         2>&1 | tee "$LOG_DIR/fio_writeverify.log"; then
     VERIFY_OK="PASS"
   else
@@ -275,14 +280,14 @@ fi
 log ">> sequential read (1M, qd32, 60s)"
 fio --name=seqread --filename="$DEV" --ioengine=libaio --direct=1 --bs=1M \
     --iodepth=32 --rw=read --runtime=60 --time_based --size=100% \
-    --group_reporting 2>&1 | tee "$LOG_DIR/fio_seqread.log" \
-    | grep -iE 'READ:|bw=' | head -1 | sed 's/^/   /' | tee -a "$SUMMARY" || true
+    --group_reporting "${ETA_OPTS[@]}" 2>&1 | tee "$LOG_DIR/fio_seqread.log" || true
+grep -E 'READ: bw=' "$LOG_DIR/fio_seqread.log" | head -1 | sed 's/^/  /' | tee -a "$SUMMARY" || true
 
 log ">> random read (4k, qd64, 30s)"
 fio --name=randread --filename="$DEV" --ioengine=libaio --direct=1 --bs=4k \
     --iodepth=64 --rw=randread --runtime=30 --time_based --size=100% \
-    --group_reporting 2>&1 | tee "$LOG_DIR/fio_randread.log" \
-    | grep -iE 'read:.*IOPS' | head -1 | sed 's/^/   /' | tee -a "$SUMMARY" || true
+    --group_reporting "${ETA_OPTS[@]}" 2>&1 | tee "$LOG_DIR/fio_randread.log" || true
+grep -iE 'read:.*IOPS' "$LOG_DIR/fio_randread.log" | head -1 | sed 's/^/   /' | tee -a "$SUMMARY" || true
 log ""
 
 # --- 4. SMART post + diff --------------------------------------------------

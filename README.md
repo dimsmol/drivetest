@@ -59,3 +59,4 @@ Residual limits (inherent, not fixable in a shell script): a disk with only a si
 ## Notes
 
 - Always re-check the device node after plugging in; `--write` erases the target.
+- Long `fio` phases print a live progress line every 30s (percent + speed + ETA for the write pass; a time countdown for the read benchmarks). Full per-phase output is saved under the `drive_test_*` log folder.
