@@ -56,15 +56,10 @@ def test_absent_report_is_unknown_not_clean():
 
 
 def test_real_report_stays_clean_when_unchanged():
-    info = SmartInfo(**{k: v for k, v in _from_nvme().items()})
-    assert classify_smart(info, []) is SmartVerdict.CLEAN
-
-
-def _from_nvme() -> dict:
     from drivetest.smart import parse_smart_json
 
     info = parse_smart_json(load_json("smart_nvme.json"))
-    return dict(model=info.model, serial=info.serial, media_errors=info.media_errors)
+    assert classify_smart(info, []) is SmartVerdict.CLEAN
 
 
 def test_format_gib():

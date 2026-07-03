@@ -47,14 +47,12 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.pyright]
 include = ["src", "tests"]
 pythonVersion = "3.11"
-# The library is checked in strict mode. Tests keep real type-error checking
-# (wrong arguments, bad calls, return types) but relax the "everything must be
-# annotated" family below - unit tests would otherwise need type annotations on
-# every fixture parameter and lambda, which is pure ceremony. This pyright
-# honors per-environment rule overrides (but not a per-environment
-# typeCheckingMode), so the rules are listed explicitly.
 typeCheckingMode = "strict"
 
+# Tests keep real type-error checking but drop annotation-only rules: pytest
+# injects fixtures via unannotated parameters, so the resulting "unknown type"
+# cascade is ceremony, not safety. (This pyright applies per-env rule overrides
+# but ignores a per-env typeCheckingMode, so rules are listed explicitly.)
 [[tool.pyright.executionEnvironments]]
 root = "tests"
 reportMissingParameterType = "none"
@@ -63,7 +61,4 @@ reportUnknownArgumentType = "none"
 reportUnknownVariableType = "none"
 reportUnknownMemberType = "none"
 reportUnknownLambdaType = "none"
-reportUntypedFunctionDecorator = "none"
-reportMissingTypeArgument = "none"
-reportPrivateUsage = "none"       # tests may exercise internal helpers
-reportUnusedFunction = "none"     # autouse fixtures read as "unused"
+reportPrivateUsage = "none"       # tests deliberately exercise internal helpers
