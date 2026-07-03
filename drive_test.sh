@@ -44,7 +44,8 @@ while [[ $# -gt 0 ]]; do
     --quick)  QUICK=1 ;;
     --force)  FORCE=1 ;;
     -h|--help) usage 0 ;;
-    /dev/*)   DEV="$1" ;;
+    /dev/*)   [[ -z "$DEV" ]] || { echo "error: more than one device given ($DEV, $1)" >&2; usage 1; }
+              DEV="$1" ;;
     *) echo "unknown argument: $1" >&2; usage 1 ;;
   esac
   shift
@@ -98,11 +99,18 @@ fi
 # from the root source down to its physical parent disk(s), so this holds even
 # when / is on dm-crypt, LVM, or a multi-disk RAID.
 ROOT_SRC="$(findmnt -no SOURCE / 2>/dev/null || true)"
-if [[ -n "$ROOT_SRC" ]]; then
+ROOT_SRC="${ROOT_SRC%%[*}"   # strip a btrfs subvolume suffix like "[/@root]"
+if [[ "$ROOT_SRC" == /dev/* ]]; then
   while read -r n; do
     [[ "/dev/$n" == "$DEV" ]] || continue
     echo "error: $DEV backs the running system (/). Refusing." >&2; exit 1
   done < <(lsblk -nrso NAME "$ROOT_SRC" 2>/dev/null || true)
+elif [[ -n "$ROOT_SRC" ]]; then
+  # Root source is not a plain block device (e.g. ZFS dataset, overlay, network
+  # root), so we cannot map it to a disk to compare. Warn rather than silently
+  # trusting - the blank-disk guard below is then the main backstop.
+  echo "warning: cannot resolve the disk backing / (root source: $ROOT_SRC)." >&2
+  echo "         Make sure $DEV is not part of your system storage." >&2
 fi
 
 # Refuse to WRITE to a disk that isn't blank, unless --force. A brand-new drive
@@ -110,14 +118,19 @@ fi
 # holders; anything found here strongly suggests the wrong disk was given (an
 # idle data disk can pass the mount/system-disk guards above).
 DEVNAME="${DEV##*/}"
-HOLDERS="$(ls -A "/sys/block/$DEVNAME/holders" 2>/dev/null || true)"
-SIGS="$(wipefs -n -- "$DEV" 2>/dev/null | tail -n +2 || true)"
-CHILDREN="$(lsblk -nro NAME "$DEV" | tail -n +2 || true)"
-if [[ -n "$HOLDERS" || -n "$SIGS" || -n "$CHILDREN" ]]; then
-  echo "warning: $DEV is not blank:" >&2
-  [[ -n "$CHILDREN" ]] && lsblk "$DEV" >&2
-  [[ -n "$SIGS" ]]     && { echo "  signatures:" >&2; wipefs -n -- "$DEV" >&2; }
-  [[ -n "$HOLDERS" ]]  && echo "  in use by (holders): $HOLDERS" >&2
+# Probe for content. Fail CLOSED: if any probe errors (device busy/vanished,
+# quirky bridge), treat the disk as non-blank so --write refuses rather than
+# proceeding on the false impression that the disk is empty.
+PROBE_ERR=0
+HOLDERS="$(ls -A "/sys/block/$DEVNAME/holders" 2>/dev/null)" || PROBE_ERR=1
+SIGS="$(wipefs -n -- "$DEV" 2>/dev/null | tail -n +2)" || PROBE_ERR=1
+CHILDREN="$(lsblk -nro NAME "$DEV" 2>/dev/null | tail -n +2)" || PROBE_ERR=1
+if [[ $PROBE_ERR == 1 || -n "$HOLDERS" || -n "$SIGS" || -n "$CHILDREN" ]]; then
+  echo "warning: $DEV is not blank, or its content could not be fully read:" >&2
+  [[ $PROBE_ERR == 1 ]] && echo "  (a blank-check probe failed - treating as non-blank)" >&2
+  [[ -n "$CHILDREN" ]]  && lsblk "$DEV" >&2
+  [[ -n "$SIGS" ]]      && { echo "  signatures:" >&2; wipefs -n -- "$DEV" >&2; }
+  [[ -n "$HOLDERS" ]]   && echo "  in use by (holders): $HOLDERS" >&2
   if [[ $DO_WRITE == 1 && $FORCE == 0 ]]; then
     echo "error: refusing --write to a non-blank disk. If you are certain this" >&2
     echo "       is the right (new) drive, re-run with --force." >&2
@@ -170,10 +183,24 @@ log ""
 # --- confirmation ----------------------------------------------------------
 
 if [[ $DO_WRITE == 1 ]]; then
+  # The pre-write identity re-check can only detect a node reassignment (e.g. a
+  # hotplug that hands $DEV to a different disk) if the serial uniquely names
+  # this disk. Require a non-empty serial that is unique among attached disks;
+  # cheap USB bridges sometimes report a fixed or duplicate serial.
+  if [[ -z "$SERIAL" ]]; then
+    echo "error: $DEV reports no serial - refusing --write (identity unverifiable)." >&2; exit 1
+  fi
+  nser="$(lsblk -dno SERIAL 2>/dev/null | sed 's/[[:space:]]*$//' | grep -Fxc -- "$SERIAL" || true)"
+  if [[ "${nser:-0}" -gt 1 ]]; then
+    echo "error: serial '$SERIAL' is not unique among attached disks ($nser matches)." >&2
+    echo "       Detach the other device; the pre-write identity check is unreliable otherwise." >&2
+    exit 1
+  fi
   echo "*** WRITE mode will ERASE ALL DATA on:"
   echo "      $DEV  |  $MODEL  |  serial $SERIAL  |  $SIZE  |  bus ${TRAN:-?}"
-  [[ -n "$CHILDREN$SIGS$HOLDERS" ]] && echo "    NOTE: this disk is NOT blank (see warning above) ***" \
-                                    || echo "***"
+  { [[ -n "$CHILDREN$SIGS$HOLDERS" || $PROBE_ERR == 1 ]] \
+      && echo "    NOTE: this disk is NOT blank / not fully readable (see warning above) ***"; } \
+    || echo "***"
   read -rp "Type the serial ($SERIAL) to confirm: " ans
   [[ "$ans" == "$SERIAL" && -n "$SERIAL" ]] || { echo "aborted (serial mismatch or empty)."; exit 1; }
 fi

@@ -44,14 +44,17 @@ Confirms full performance and that the slot/contacts are good. Then clone/reinst
 
 `--write` is destructive. The script refuses to touch the wrong disk through several independent guards:
 
-- **Whole-disk only** - rejects partitions and dm/LVM/RAID/loop nodes (`TYPE != disk`).
-- **Not mounted** - refuses if the disk or any partition is mounted or in use as swap.
-- **Not the system disk** - refuses the disk backing `/`. The target path is canonicalized first, so a `by-id`/`by-path` symlink can't slip past this.
-- **Must be blank** - refuses `--write` if the disk has a partition table, filesystem/RAID/LVM signature, or kernel holders. A brand-new drive is blank; anything found means you likely have the wrong disk. Override with `--force` only when certain.
+- **One whole disk only** - a single `/dev` target, and it must be a whole disk, not a partition or dm/LVM/RAID/loop node (`TYPE != disk`).
+- **Not mounted** - refuses if the disk or any child is mounted or in use as swap. Fails closed: if the state can't be read, it refuses.
+- **Not the system disk** - refuses the disk backing `/`, walking through any LVM/RAID/LUKS/btrfs-subvolume layers. The target path is canonicalized first, so a `by-id`/`by-path` symlink can't slip past. If the root source can't be mapped to a disk (e.g. ZFS or overlay root), it warns rather than silently trusting.
+- **Must be blank** - refuses `--write` if the disk has a partition table, filesystem/RAID/LVM signature, or kernel holders. Fails closed: if a blank-check probe errors, the disk is treated as non-blank. A brand-new drive is blank; anything found means you likely have the wrong disk. Override with `--force` only when certain.
+- **Unique serial** - `--write` requires a non-empty serial that is unique among attached disks, so the pre-write identity check can reliably detect a node reassignment.
 - **Serial confirmation** - `--write` prints the target's identity and requires typing its serial.
-- **Re-check before writing** - the device identity (serial/WWN/size) and mount state are re-verified immediately before `fio` writes, so a replug that reassigns the node (e.g. `/dev/sdb` -> a different disk) aborts instead of wiping it.
+- **Re-check before writing** - the device identity (serial/WWN/size/model) and mount state are re-verified immediately before `fio` writes, so a replug that reassigns the node (e.g. `/dev/sdb` -> a different disk) aborts instead of wiping it.
 
 Read-only mode (no `--write`) never writes and skips these write-only refusals.
+
+Residual limits (inherent, not fixable in a shell script): a disk with only a signature that `libblkid`/`wipefs` doesn't recognize can look blank; `--force` bypasses the blank guard (including on ZFS/overlay-root systems where the system-disk walk can't verify); and device-open is not atomic, so a hostile replug in the millisecond between the final re-check and `fio` remains theoretically possible. Always re-check the node before running `--write`.
 
 ## Notes
 
