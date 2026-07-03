@@ -8,8 +8,8 @@ Two deliberately different output strategies (see the module design notes):
   is unambiguous. A monitor samples temperature alongside and aborts the run at
   the thermal ceiling before the enclosure can hard-disconnect.
 - **read benchmarks** use ``--output-format=json`` for exact bandwidth/IOPS,
-  parsed by field. This kills the old text-grep bugs (the aggregate ``READ:``
-  line vs. the ``seqread`` header, etc.).
+  parsed by field - robust against the ambiguities that trip up text scraping
+  (the aggregate ``READ:`` line vs. the ``seqread`` job header, locale, etc.).
 
 The pure pieces - argv construction, JSON parsing, region classification and
 the monitor decision loop - are unit-tested; :class:`FioRunner` wires them to a
@@ -33,6 +33,9 @@ from .thermal import Temp, ThermalPolicy, exceeds_ceiling
 # fio ETA options: force an ETA line every 30s even though stdout is captured
 # (fio would otherwise stay silent until done), on its own line so it streams.
 ETA_OPTS = ["--eta=always", "--eta-newline=30s"]
+
+# Seconds to wait after SIGTERM before escalating to SIGKILL when stopping fio.
+TERMINATE_GRACE_S = 10
 
 
 class RegionResult(StrEnum):
@@ -212,8 +215,7 @@ class FioRunner:
                 self._echo(line)
 
         # try/finally guarantees we never leave a write running against the
-        # device on an abnormal exit (Ctrl-C, an error in the monitor, a kill) -
-        # the shell version used a `trap ... INT TERM` for the same reason.
+        # device on an abnormal exit (Ctrl-C, an error in the monitor, a kill).
         try:
             with open(log_path, "w") as logf:
                 assert proc.stdout is not None
@@ -239,7 +241,7 @@ class FioRunner:
         """Stop fio, escalating SIGTERM -> SIGKILL if it lingers."""
         proc.terminate()
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=TERMINATE_GRACE_S)
         except subprocess.TimeoutExpired:
             proc.kill()
 

@@ -81,6 +81,7 @@ Modules, each useful on its own:
 
 - `proc` - a thin, mockable subprocess seam (run a command, parse JSON).
 - `tools` - check that required external CLIs are present.
+- `units` - binary size constants (`KIB`/`MIB`/`GIB`).
 - `devices` - enumerate block devices and model their identity (`lsblk`).
 - `safety` - the destructive-write guards (all pure decisions over gathered data).
 - `smart` - read SMART/health/temperature via `smartctl`/`nvme`.
@@ -91,12 +92,15 @@ Modules, each useful on its own:
 - `report` - summary, SMART diff and result classification.
 - `cli` / `orchestrator` - argument parsing and the end-to-end run.
 
+The import graph is acyclic and layered; `pyproject.toml` encodes the layering as an `import-linter` contract.
+
 Checks (all should be clean):
 
 ```bash
-PYTHONPATH=src pytest -q     # 113 tests
+PYTHONPATH=src pytest -q     # 115 tests
 ruff check src tests         # lint
 pyright                      # types (strict for src; tests relaxed - see pyproject.toml)
+lint-imports                 # layering / no import cycles (needs the dev extra)
 ```
 
 `pyproject.toml` defines a `drivetest` console script, so `pip install -e .` also exposes the `drivetest` command directly (the `./drivetest` wrapper just avoids needing an install).

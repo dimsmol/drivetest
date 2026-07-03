@@ -17,10 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
-
-if TYPE_CHECKING:
-    from .cli import Options
+from typing import TextIO
 
 from . import smart
 from .devices import Device, all_serials, find_device, list_devices
@@ -49,6 +46,20 @@ from .tools import missing_tools, required_tools
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_ATTENTION = 2
+
+
+@dataclass(frozen=True)
+class Options:
+    """A validated run configuration (produced by the CLI, consumed here)."""
+
+    device: str
+    write: bool = False
+    quick: bool = False
+    force: bool = False
+    parts: int = 1
+    only: str | None = None
+    assume_yes: bool = False
+    log_dir: str | None = None
 
 
 def _timestamp() -> str:

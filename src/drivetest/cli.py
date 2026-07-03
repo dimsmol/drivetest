@@ -10,8 +10,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import dataclass
 
+from .orchestrator import Options, RunContext, run
 from .planning import parse_only_spec
 
 PROG = "drivetest"
@@ -30,18 +30,6 @@ examples:
 Region boundaries depend on --parts, so pass the SAME --parts N when resuming
 with --only.
 """
-
-
-@dataclass(frozen=True)
-class Options:
-    device: str
-    write: bool = False
-    quick: bool = False
-    force: bool = False
-    parts: int = 1
-    only: str | None = None
-    assume_yes: bool = False
-    log_dir: str | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,8 +112,6 @@ def parse_args(argv: list[str]) -> Options:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from .orchestrator import RunContext, run
-
     options = parse_args(sys.argv[1:] if argv is None else argv)
 
     if os.geteuid() != 0:

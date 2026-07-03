@@ -47,9 +47,9 @@ class Device:
 
     @property
     def identity(self) -> str:
-        """A stable fingerprint used to detect the node being reassigned to a
-        different physical device (e.g. a USB replug) between confirmation and
-        write. Mirrors the shell script's ``SERIAL,WWN,SIZE,MODEL``.
+        """A stable fingerprint (serial, WWN, size, model) used to detect the
+        node being reassigned to a different physical device (e.g. a USB
+        replug) between confirmation and write.
         """
         return "|".join(
             "" if v is None else str(v)

@@ -16,8 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 # A temperature reading of ``None`` means "could not read" (flaky bridge). The
-# policy treats an unknown temperature conservatively but never *blocks* on it,
-# mirroring the shell script: unreadable -> proceed, but pause on cooldown.
+# policy treats an unknown temperature conservatively but never *blocks* on it:
+# unreadable -> proceed, but pause on cooldown.
 Temp = int | None
 
 

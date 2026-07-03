@@ -98,7 +98,7 @@ def check_not_system_disk(dev: Device, root: RootInfo) -> Check:
 
     If the root source could not be resolved to physical disks, this returns a
     *passing* check whose detail flags the uncertainty - the blank-disk guard is
-    then the backstop (mirrors the shell script's warn-don't-trust behavior).
+    then the backstop (warn rather than silently trust).
     """
     if not root.resolved:
         return Check(

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MIB = 1024 * 1024
-DEFAULT_QUICK_BYTES = 50 * 1024 * 1024 * 1024  # 50 GiB
+from .units import GIB, MIB
+
+DEFAULT_QUICK_BYTES = 50 * GIB
 
 
 @dataclass(frozen=True)
@@ -34,8 +35,7 @@ def plan_regions(dev_bytes: int, parts: int) -> list[Region]:
 
     Each non-final region is ``dev_bytes // parts`` rounded *down* to a whole
     MiB (fio's block size), and the final region absorbs the remainder so the
-    regions exactly tile the device with no gap or overlap. Mirrors the shell
-    script's arithmetic so a resume across the two implementations is safe.
+    regions exactly tile the device with no gap or overlap.
     """
     if parts < 1:
         raise ValueError(f"parts must be >= 1, got {parts}")

@@ -18,7 +18,7 @@ keywords = ["ssd", "nvme", "smart", "fio", "drive", "benchmark", "storage"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "import-linter>=2"]
 
 [project.scripts]
 drivetest = "drivetest.cli:main"
@@ -28,6 +28,24 @@ Homepage = "https://github.com/dimsmol/drivetest"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/drivetest"]
+
+# Enforce a layered architecture (which also guarantees no import cycles).
+# A layer may import lower layers only; modules joined by "|" are siblings that
+# may not import each other. Run with: lint-imports  (needs the dev extra).
+[tool.importlinter]
+root_package = "drivetest"
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture (no import cycles)"
+type = "layers"
+layers = [
+    "cli",
+    "orchestrator",
+    "probe",
+    "safety | report | fio",
+    "planning | devices | smart",
+    "units | proc | tools | thermal",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

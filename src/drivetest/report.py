@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TextIO
 
 from .smart import SmartInfo
+from .units import GIB
 
 
 class SmartVerdict(StrEnum):
@@ -52,7 +53,7 @@ def classify_smart(after: SmartInfo, deltas: list[SmartDelta]) -> SmartVerdict:
     """Turn the after-snapshot and diff into a verdict.
 
     A post-run report that isn't a real report (device dropped) is UNKNOWN, not
-    clean - the exact trap the shell version once fell into.
+    clean - an error payload must never be reported as a healthy result.
     """
     if not after.has_report:
         return SmartVerdict.UNKNOWN
@@ -78,4 +79,4 @@ class Logger:
 
 
 def format_gib(num_bytes: int) -> str:
-    return f"{num_bytes / (1024 ** 3):.0f}GiB"
+    return f"{num_bytes / GIB:.0f}GiB"

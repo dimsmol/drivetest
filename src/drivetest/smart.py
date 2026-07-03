@@ -1,9 +1,9 @@
 """Read SMART/health/temperature via ``smartctl`` (and ``nvme`` for temp).
 
 ``smartctl --json`` (smartmontools >= 7) gives structured health data, so we
-address fields by name instead of grepping formatted text - which is exactly
-where the old shell script kept breaking. :func:`parse_smart_json` is pure and
-tested against captured NVMe and SATA report fixtures.
+address fields by name instead of grepping formatted text, which is brittle
+across locales and versions. :func:`parse_smart_json` is pure and tested
+against captured NVMe and SATA report fixtures.
 
 USB bridges expose the drive through different passthrough modes; we probe the
 common ones and remember the ``-d`` args that work (:func:`detect_access_mode`).
@@ -25,6 +25,14 @@ ACCESS_MODES: tuple[tuple[str, ...], ...] = (
     ("-d", "sntrealtek"),
     ("-d", "sat"),
 )
+
+# Temperature handling. A reading outside this window is treated as garbage from
+# a flaky bridge rather than a real temperature.
+MIN_PLAUSIBLE_TEMP_C = 15
+MAX_PLAUSIBLE_TEMP_C = 110
+KELVIN_OFFSET = 273
+# No drive runs this hot in Celsius, so a value above it must be Kelvin.
+CELSIUS_KELVIN_THRESHOLD = 200
 
 
 @dataclass(frozen=True)
@@ -175,7 +183,7 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     if temp is None:
         info = read_smart(runner, dev_path, mode)
         temp = info.temperature_c
-    if temp is None or not (15 <= temp <= 110):
+    if temp is None or not (MIN_PLAUSIBLE_TEMP_C <= temp <= MAX_PLAUSIBLE_TEMP_C):
         return None
     return temp
 
@@ -185,4 +193,4 @@ def _kelvin_or_celsius(value: Any) -> int | None:
     n = _int(value)
     if n is None:
         return None
-    return n - 273 if n > 200 else n
+    return n - KELVIN_OFFSET if n > CELSIUS_KELVIN_THRESHOLD else n
