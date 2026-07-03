@@ -26,8 +26,11 @@ Pass = write/verify PASS, SMART diff clean, temp stayed under ~70 C.
 
 **Passive enclosures overheat on a sustained full write.** A continuous 2 TB write in a fanless USB enclosure (e.g. the Arion) climbs steadily past the drive's ~75-80 C throttle point and the bridge eventually drops off the bus - which fails the test with no integrity result. Two mitigations, combine as needed:
 
-- `--parts N` splits the write+verify into N regions with a cooldown between each, so heat never accumulates. Start with `--parts 8` for a passive enclosure. The script also enforces a hard temperature ceiling (78 C): if a region ever reaches it, fio is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
+- `--parts N` splits the write+verify into N regions, cooling the drive to <= 50 C before each, so heat never accumulates. Start with `--parts 8` for a passive enclosure. Before each region it also refuses to start if the drive is still hot (> 55 C after cooling), and while a region runs it enforces a hard ceiling (78 C): if reached, fio is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
+- `--only SPEC` runs just some of the N parts, so you can break and resume without redoing everything. SPEC is a comma list of parts/ranges over the **same** `--parts N`, e.g. `--only 1-4` now and `--only 5-8` later (or `--only 6` to redo a single region). Always pass the same `--parts N` when resuming - region boundaries depend on it.
 - A **fan** on the enclosure is the real fix - even a cheap desk fan drops it several degrees and may let a single `--write` pass complete.
+
+Resuming across sessions: each `--only` run reports `PASS (parts X of N ...)` for just the parts it ran - the drive is fully verified only once every part has passed across your runs.
 
 Because of this thermal limit, the definitive full-speed write+verify is really Stage 2 (internal); the external pass mainly screens for a dead-on-arrival drive.
 

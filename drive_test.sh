@@ -18,6 +18,7 @@ DO_WRITE=0
 QUICK=0
 FORCE=0
 PARTS=1
+ONLY=""
 DEV=""
 
 usage() {
@@ -25,7 +26,7 @@ usage() {
 drive_test.sh - health, integrity and performance test for an SSD.
 
 Usage:
-  sudo ./drive_test.sh [--write] [--quick] [--force] [--parts N] /dev/DEVICE
+  sudo ./drive_test.sh [--write] [--quick] [--force] [--parts N] [--only SPEC] /dev/DEVICE
 
   (no flags)  SMART health + read benchmarks only (non-destructive)
   --write     also run the full destructive write+verify pass (WIPES target)
@@ -34,11 +35,17 @@ Usage:
   --parts N   split the full write+verify into N regions with a cooldown
               between each. For passively-cooled USB enclosures that overheat
               and disconnect during a sustained full-drive write. Default 1.
+  --only SPEC run only some of the N parts (to break and resume later). SPEC is
+              a comma list of parts/ranges over the SAME --parts N, e.g.
+              "4-8", "5", "1-3,7". Region boundaries depend on N, so always
+              pass the same --parts N when resuming.
 
 Examples:
   sudo ./drive_test.sh /dev/sdb
   sudo ./drive_test.sh --write /dev/sdb
-  sudo ./drive_test.sh --write --parts 6 /dev/sdb
+  sudo ./drive_test.sh --write --parts 8 /dev/sdb
+  sudo ./drive_test.sh --write --parts 8 --only 1-4 /dev/sdb   # first half now
+  sudo ./drive_test.sh --write --parts 8 --only 5-8 /dev/sdb   # rest later
 EOF
   exit "${1:-0}"
 }
@@ -50,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     --force)   FORCE=1 ;;
     --parts)   PARTS="${2:-}"; shift || true ;;
     --parts=*) PARTS="${1#*=}" ;;
+    --only)    ONLY="${2:-}"; shift || true ;;
+    --only=*)  ONLY="${1#*=}" ;;
     -h|--help) usage 0 ;;
     /dev/*)    [[ -z "$DEV" ]] || { echo "error: more than one device given ($DEV, $1)" >&2; usage 1; }
                DEV="$1" ;;
@@ -60,6 +69,23 @@ done
 
 [[ -n "$DEV" ]] || { echo "error: no /dev/... target given" >&2; usage 1; }
 [[ "$PARTS" =~ ^[1-9][0-9]*$ ]] || { echo "error: --parts needs a positive integer" >&2; usage 1; }
+
+# Expand --only SPEC into the set of part numbers to run (RUN_PART[n]=1).
+# Default (empty) = run all parts.
+declare -A RUN_PART
+if [[ -n "$ONLY" ]]; then
+  [[ $DO_WRITE == 1 && $QUICK == 0 ]] || { echo "error: --only requires --write without --quick" >&2; usage 1; }
+  IFS=',' read -ra _items <<<"$ONLY"
+  for it in "${_items[@]}"; do
+    if   [[ "$it" =~ ^([0-9]+)-([0-9]+)$ ]]; then a="${BASH_REMATCH[1]}"; b="${BASH_REMATCH[2]}"
+    elif [[ "$it" =~ ^([0-9]+)-$         ]]; then a="${BASH_REMATCH[1]}"; b="$PARTS"
+    elif [[ "$it" =~ ^([0-9]+)$          ]]; then a="$it"; b="$it"
+    else echo "error: bad --only item '$it' (use N, A-B, or A-)" >&2; usage 1; fi
+    (( a >= 1 && b <= PARTS && a <= b )) || { echo "error: --only '$it' out of range 1-$PARTS" >&2; usage 1; }
+    for (( k=a; k<=b; k++ )); do RUN_PART["$k"]=1; done
+  done
+fi
+
 [[ $EUID -eq 0 ]] || { echo "error: run as root (sudo)" >&2; exit 1; }
 
 # Canonicalize early: a by-id/by-path symlink must resolve to the real /dev node
@@ -241,7 +267,8 @@ ETA_OPTS=(--eta=always --eta-newline=30s)
 # Thermal pacing, for passively-cooled USB enclosures that overheat on a
 # sustained full-drive write (see --parts):
 CEIL_TEMP=78       # halt a write region if the drive reaches this (C)
-COOL_TARGET=50     # between regions, idle until the drive cools to this (C)
+COOL_TARGET=50     # before/between regions, idle until the drive cools to this (C)
+START_MAX=55       # refuse to start a region if still hotter than this (C)
 COOL_MAXWAIT=1200  # ...but never wait longer than this (s)
 
 # Kill any in-flight fio if the script exits/aborts, so Ctrl-C can't leave a
@@ -300,6 +327,23 @@ cooldown() {
   log "   cooldown: still ${t:-n/a} C after ${waited}s - continuing"
 }
 
+# Pre-start thermal gate: don't begin a region hot. If above COOL_TARGET, cool
+# first; then refuse (return 1) if still above START_MAX. Returns 0 to proceed.
+prestart_ok() {
+  local t
+  t="$(get_temp)"
+  if [[ "$t" != "n/a" ]] && (( t > COOL_TARGET )); then
+    log "   drive at ${t} C before start - cooling first"
+    cooldown "$COOL_TARGET" "$COOL_MAXWAIT"
+    t="$(get_temp)"
+  fi
+  if [[ "$t" != "n/a" ]] && (( t > START_MAX )); then
+    log "   refusing to start: ${t} C still above ${START_MAX} C (improve cooling/ambient, then resume)"
+    return 1
+  fi
+  return 0
+}
+
 # --- 1. SMART baseline -----------------------------------------------------
 
 log ">> SMART baseline -> $LOG_DIR/smart_before.txt"
@@ -324,29 +368,47 @@ if [[ $DO_WRITE == 1 ]]; then
 
   if [[ $QUICK == 1 ]]; then
     log ">> write+verify (crc32c, first 50G quick); ceiling ${CEIL_TEMP} C"
-    run_region 0 50G "$LOG_DIR/fio_writeverify.log"
+    if prestart_ok; then
+      run_region 0 50G "$LOG_DIR/fio_writeverify.log"
+    else
+      REGION_RESULT="OVERHEAT"
+    fi
     VERIFY_OK="$REGION_RESULT"
-    log "   result: $REGION_RESULT (peak $(peak_temp) C)"
+    log "   result: $VERIFY_OK (peak $(peak_temp) C)"
   else
     DEV_BYTES="$(blockdev --getsize64 "$DEV")"
     part_size=$(( DEV_BYTES / PARTS / 1048576 * 1048576 ))
-    log ">> write+verify (crc32c, full) in ${PARTS} part(s); ceiling ${CEIL_TEMP} C, cooldown to ${COOL_TARGET} C between"
-    VERIFY_OK="PASS"
-    for (( i=0; i<PARTS; i++ )); do
-      off=$(( i * part_size ))
-      if (( i == PARTS-1 )); then sz=$(( DEV_BYTES - off )); else sz="$part_size"; fi
-      log ">> part $((i+1))/${PARTS}  offset=$(gib "$off")  size=$(gib "$sz")"
-      pstart="$(wc -l <"$TEMP_LOG" 2>/dev/null || echo 0)"
-      run_region "$off" "$sz" "$LOG_DIR/fio_writeverify_part$((i+1)).log"
-      ppeak="$(tail -n +$((pstart+1)) "$TEMP_LOG" 2>/dev/null | awk '{print $2}' | grep -oE '^[0-9]+$' | sort -n | tail -1)"
-      log "   part $((i+1)): ${REGION_RESULT} (peak ${ppeak:-n/a} C)"
-      if [[ "$REGION_RESULT" != "PASS" ]]; then
-        VERIFY_OK="$REGION_RESULT"
-        log "   stopping after part $((i+1)) (${REGION_RESULT})"
+    if [[ -n "$ONLY" ]]; then sel="parts $ONLY"; else sel="all parts"; fi
+    log ">> write+verify (crc32c, full) in ${PARTS} part(s), running ${sel}; ceiling ${CEIL_TEMP} C, cool to ${COOL_TARGET} C before each"
+    VERIFY_OK="PASS"; ran=0
+    for (( n=1; n<=PARTS; n++ )); do
+      if [[ -n "$ONLY" && -z "${RUN_PART[$n]:-}" ]]; then
+        log ">> part ${n}/${PARTS}: skipped (not selected)"
+        continue
+      fi
+      off=$(( (n-1) * part_size ))
+      if (( n == PARTS )); then sz=$(( DEV_BYTES - off )); else sz="$part_size"; fi
+      log ">> part ${n}/${PARTS}  offset=$(gib "$off")  size=$(gib "$sz")"
+      if ! prestart_ok; then
+        VERIFY_OK="OVERHEAT"
+        log "   stopping before part ${n} (too hot to start)"
         break
       fi
-      if (( i < PARTS-1 )); then cooldown "$COOL_TARGET" "$COOL_MAXWAIT"; fi
+      pstart="$(wc -l <"$TEMP_LOG" 2>/dev/null || echo 0)"
+      run_region "$off" "$sz" "$LOG_DIR/fio_writeverify_part${n}.log"
+      ran=$((ran+1))
+      ppeak="$(tail -n +$((pstart+1)) "$TEMP_LOG" 2>/dev/null | awk '{print $2}' | grep -oE '^[0-9]+$' | sort -n | tail -1)"
+      log "   part ${n}: ${REGION_RESULT} (peak ${ppeak:-n/a} C)"
+      if [[ "$REGION_RESULT" != "PASS" ]]; then
+        VERIFY_OK="$REGION_RESULT"
+        log "   stopping after part ${n} (${REGION_RESULT})"
+        break
+      fi
     done
+    if [[ "$VERIFY_OK" == "PASS" && -n "$ONLY" ]]; then
+      VERIFY_OK="PASS (parts $ONLY of $PARTS - not the whole drive)"
+    fi
+    (( ran > 0 )) || log "   note: no parts ran"
   fi
   log "   write/verify: $VERIFY_OK"
   log ""
