@@ -10,25 +10,39 @@
 # Read-only by default. Pass --write to run the destructive full-surface
 # write+verify pass (this WIPES the target - only for a new/empty drive).
 #
-# Usage:
-#   sudo ./drive_test.sh /dev/sdb            # health + read benchmarks only
-#   sudo ./drive_test.sh --write /dev/sdb    # + full destructive write/verify
-#   sudo ./drive_test.sh --write --quick /dev/sdb   # verify first 50G only
-#
 set -euo pipefail
 
 # --- options ---------------------------------------------------------------
 
 DO_WRITE=0
 QUICK=0
+FORCE=0
 DEV=""
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() {
+  cat <<'EOF'
+drive_test.sh - health, integrity and performance test for an SSD.
+
+Usage:
+  sudo ./drive_test.sh [--write] [--quick] [--force] /dev/DEVICE
+
+  (no flags)  SMART health + read benchmarks only (non-destructive)
+  --write     also run the full destructive write+verify pass (WIPES target)
+  --quick     with --write, verify only the first 50G
+  --force     allow --write to a non-blank disk (has partitions/signatures)
+
+Examples:
+  sudo ./drive_test.sh /dev/sdb
+  sudo ./drive_test.sh --write /dev/sdb
+EOF
+  exit "${1:-0}"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --write)  DO_WRITE=1 ;;
     --quick)  QUICK=1 ;;
+    --force)  FORCE=1 ;;
     -h|--help) usage 0 ;;
     /dev/*)   DEV="$1" ;;
     *) echo "unknown argument: $1" >&2; usage 1 ;;
@@ -38,11 +52,16 @@ done
 
 [[ -n "$DEV" ]] || { echo "error: no /dev/... target given" >&2; usage 1; }
 [[ $EUID -eq 0 ]] || { echo "error: run as root (sudo)" >&2; exit 1; }
+
+# Canonicalize early: a by-id/by-path symlink must resolve to the real /dev node
+# so every guard and comparison below sees the same path (a symlink would slip
+# past the string-compare system-disk guard otherwise).
+DEV="$(readlink -f -- "$DEV")"
 [[ -b "$DEV" ]] || { echo "error: $DEV is not a block device" >&2; exit 1; }
 
 # Check every external tool the script relies on, up front, and report all that
 # are missing at once. nvme-cli is only needed for an NVMe target.
-REQUIRED=(smartctl lsblk findmnt fio awk grep sed sort diff tee date mkdir)
+REQUIRED=(smartctl lsblk findmnt fio wipefs awk grep sed sort diff tail tee date mkdir readlink)
 [[ "$DEV" == *nvme* ]] && REQUIRED+=(nvme)
 missing=()
 for t in "${REQUIRED[@]}"; do
@@ -73,12 +92,37 @@ if [[ "$ROOT_DISK" == "$DEV" ]]; then
   echo "error: $DEV is the system disk (backs /). Refusing." >&2; exit 1
 fi
 
+# Refuse to WRITE to a disk that isn't blank, unless --force. A brand-new drive
+# has no partition table, filesystem, or RAID/LVM signature, and no kernel
+# holders; anything found here strongly suggests the wrong disk was given (an
+# idle data disk can pass the mount/system-disk guards above).
+DEVNAME="${DEV##*/}"
+HOLDERS="$(ls -A "/sys/block/$DEVNAME/holders" 2>/dev/null || true)"
+SIGS="$(wipefs -n -- "$DEV" 2>/dev/null | tail -n +2 || true)"
+CHILDREN="$(lsblk -nro NAME "$DEV" | tail -n +2 || true)"
+if [[ -n "$HOLDERS" || -n "$SIGS" || -n "$CHILDREN" ]]; then
+  echo "warning: $DEV is not blank:" >&2
+  [[ -n "$CHILDREN" ]] && lsblk "$DEV" >&2
+  [[ -n "$SIGS" ]]     && { echo "  signatures:" >&2; wipefs -n -- "$DEV" >&2; }
+  [[ -n "$HOLDERS" ]]  && echo "  in use by (holders): $HOLDERS" >&2
+  if [[ $DO_WRITE == 1 && $FORCE == 0 ]]; then
+    echo "error: refusing --write to a non-blank disk. If you are certain this" >&2
+    echo "       is the right (new) drive, re-run with --force." >&2
+    exit 1
+  fi
+fi
+
 # --- device identity + smartctl access mode -------------------------------
 
 MODEL="$(lsblk -dno MODEL "$DEV" | xargs || true)"
 SERIAL="$(lsblk -dno SERIAL "$DEV" | xargs || true)"
 SIZE="$(lsblk -dno SIZE "$DEV")"
 TRAN="$(lsblk -dno TRAN "$DEV" | xargs || true)"
+
+# Stable identity fingerprint, used to detect the node being reassigned to a
+# different disk (e.g. an enclosure replug) between confirmation and write.
+dev_ident() { lsblk -dno SERIAL,WWN,SIZE,MODEL "$DEV" 2>/dev/null | xargs || true; }
+IDENT="$(dev_ident)"
 
 # Find the smartctl -d args that actually work for this device (bare, then the
 # common USB-NVMe bridge modes, then SAT for SATA-behind-USB).
@@ -113,9 +157,12 @@ log ""
 # --- confirmation ----------------------------------------------------------
 
 if [[ $DO_WRITE == 1 ]]; then
-  echo "*** WRITE mode will ERASE ALL DATA on $DEV ($MODEL / $SERIAL / $SIZE) ***"
+  echo "*** WRITE mode will ERASE ALL DATA on:"
+  echo "      $DEV  |  $MODEL  |  serial $SERIAL  |  $SIZE  |  bus ${TRAN:-?}"
+  [[ -n "$CHILDREN$SIGS$HOLDERS" ]] && echo "    NOTE: this disk is NOT blank (see warning above) ***" \
+                                    || echo "***"
   read -rp "Type the serial ($SERIAL) to confirm: " ans
-  [[ "$ans" == "$SERIAL" && -n "$SERIAL" ]] || { echo "aborted."; exit 1; }
+  [[ "$ans" == "$SERIAL" && -n "$SERIAL" ]] || { echo "aborted (serial mismatch or empty)."; exit 1; }
 fi
 
 # --- helpers ---------------------------------------------------------------
@@ -158,6 +205,15 @@ log ""
 
 VERIFY_OK="skipped"
 if [[ $DO_WRITE == 1 ]]; then
+  # Last line of defense against a node reassigned since we confirmed: the disk
+  # must still be the same physical device, and still unmounted.
+  if [[ "$(dev_ident)" != "$IDENT" ]]; then
+    log "error: $DEV identity changed since confirmation - aborting write."
+    log "       was: [$IDENT]  now: [$(dev_ident)]"; exit 1
+  fi
+  if lsblk -nro MOUNTPOINT "$DEV" | grep -q .; then
+    log "error: $DEV became mounted - aborting write."; exit 1
+  fi
   SIZE_ARG=$([[ $QUICK == 1 ]] && echo "--size=50G" || echo "--size=100%")
   log ">> write+verify (crc32c, $([[ $QUICK == 1 ]] && echo '50G' || echo 'full')) - this is the long one"
   start_temp_monitor

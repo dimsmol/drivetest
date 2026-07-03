@@ -40,6 +40,19 @@ Do at swap time. Fit the SN850X, boot a **Linux live USB**, drive is `/dev/nvme0
 
 Confirms full performance and that the slot/contacts are good. Then clone/reinstall. **Keep the old drive untouched until Stage 2 passes.**
 
+## Safety
+
+`--write` is destructive. The script refuses to touch the wrong disk through several independent guards:
+
+- **Whole-disk only** - rejects partitions and dm/LVM/RAID/loop nodes (`TYPE != disk`).
+- **Not mounted** - refuses if the disk or any partition is mounted or in use as swap.
+- **Not the system disk** - refuses the disk backing `/`. The target path is canonicalized first, so a `by-id`/`by-path` symlink can't slip past this.
+- **Must be blank** - refuses `--write` if the disk has a partition table, filesystem/RAID/LVM signature, or kernel holders. A brand-new drive is blank; anything found means you likely have the wrong disk. Override with `--force` only when certain.
+- **Serial confirmation** - `--write` prints the target's identity and requires typing its serial.
+- **Re-check before writing** - the device identity (serial/WWN/size) and mount state are re-verified immediately before `fio` writes, so a replug that reassigns the node (e.g. `/dev/sdb` -> a different disk) aborts instead of wiping it.
+
+Read-only mode (no `--write`) never writes and skips these write-only refusals.
+
 ## Notes
 
 - Always re-check the device node after plugging in; `--write` erases the target.
