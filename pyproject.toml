@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "drivetest"
+version = "0.1.0"
+description = "Health, integrity and performance test for a storage device (SSD/NVMe), with data-safety guards and thermal pacing for passive USB enclosures."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "dimsmol", email = "dimsmol@gmail.com" }]
+keywords = ["ssd", "nvme", "smart", "fio", "drive", "benchmark", "storage"]
+
+# No third-party runtime dependencies on purpose: the tool must run from a
+# minimal Linux live USB (Stage 2), where only the stdlib is guaranteed. All
+# real work is delegated to external CLIs (fio, smartctl, nvme, lsblk, ...).
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+drivetest = "drivetest.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dimsmol/drivetest"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drivetest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "fio: tests that shell out to a real fio binary (skipped if fio is absent)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"

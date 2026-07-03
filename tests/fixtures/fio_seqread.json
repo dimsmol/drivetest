@@ -1,0 +1,17 @@
+{
+  "fio version": "fio-3.41",
+  "jobs": [
+    {
+      "jobname": "seqread",
+      "error": 0,
+      "read": {
+        "io_bytes": 60129542144,
+        "bw": 978944,
+        "bw_bytes": 1002438656,
+        "iops": 956.0,
+        "runtime": 60000
+      },
+      "write": {"io_bytes": 0, "bw": 0, "bw_bytes": 0, "iops": 0.0}
+    }
+  ]
+}

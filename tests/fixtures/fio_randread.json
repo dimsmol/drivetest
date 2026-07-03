@@ -1,0 +1,17 @@
+{
+  "fio version": "fio-3.41",
+  "jobs": [
+    {
+      "jobname": "randread",
+      "error": 0,
+      "read": {
+        "io_bytes": 8589934592,
+        "bw": 279620,
+        "bw_bytes": 286330880,
+        "iops": 69905.0,
+        "runtime": 30000
+      },
+      "write": {"io_bytes": 0, "bw": 0, "bw_bytes": 0, "iops": 0.0}
+    }
+  ]
+}

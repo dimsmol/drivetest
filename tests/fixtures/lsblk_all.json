@@ -1,0 +1,26 @@
+{
+  "blockdevices": [
+    {
+      "name": "sda", "path": "/dev/sda", "type": "disk", "size": 2000398934016,
+      "model": "ESD-S1C", "serial": "DUP-SERIAL", "wwn": null, "tran": "usb",
+      "mountpoints": [null], "children": []
+    },
+    {
+      "name": "sdb", "path": "/dev/sdb", "type": "disk", "size": 1000204886016,
+      "model": "Portable", "serial": "DUP-SERIAL", "wwn": null, "tran": "usb",
+      "mountpoints": [null], "children": []
+    },
+    {
+      "name": "nvme0n1", "path": "/dev/nvme0n1", "type": "disk", "size": 512110190592,
+      "model": "PM981", "serial": "S3ZHNF0KC28756", "wwn": "eui.0025", "tran": "nvme",
+      "mountpoints": [null],
+      "children": [
+        {
+          "name": "nvme0n1p4", "path": "/dev/nvme0n1p4", "type": "part", "size": 511000000000,
+          "model": null, "serial": null, "wwn": null, "tran": null,
+          "mountpoints": ["/"], "children": []
+        }
+      ]
+    }
+  ]
+}

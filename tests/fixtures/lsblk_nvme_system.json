@@ -1,0 +1,41 @@
+{
+  "blockdevices": [
+    {
+      "name": "nvme0n1",
+      "path": "/dev/nvme0n1",
+      "type": "disk",
+      "size": 512110190592,
+      "model": "PM981 NVMe Samsung 512GB",
+      "serial": "S3ZHNF0KC28756",
+      "wwn": "eui.0025388801b4d8f7",
+      "tran": "nvme",
+      "mountpoints": [null],
+      "children": [
+        {
+          "name": "nvme0n1p1",
+          "path": "/dev/nvme0n1p1",
+          "type": "part",
+          "size": 786432000,
+          "model": null,
+          "serial": null,
+          "wwn": null,
+          "tran": null,
+          "mountpoints": ["/boot"],
+          "children": []
+        },
+        {
+          "name": "nvme0n1p4",
+          "path": "/dev/nvme0n1p4",
+          "type": "part",
+          "size": 511000000000,
+          "model": null,
+          "serial": null,
+          "wwn": null,
+          "tran": null,
+          "mountpoints": ["/"],
+          "children": []
+        }
+      ]
+    }
+  ]
+}

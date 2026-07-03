@@ -1,0 +1,23 @@
+{
+  "json_format_version": [1, 0],
+  "device": {"name": "/dev/sdb", "type": "sat", "protocol": "ATA"},
+  "model_name": "Samsung SSD 860 EVO 1TB",
+  "serial_number": "S3Z8NB0K123456",
+  "firmware_version": "RVT04B6Q",
+  "user_capacity": {"blocks": 1953525168, "bytes": 1000204886016},
+  "smart_status": {"passed": true},
+  "temperature": {"current": 30},
+  "power_on_time": {"hours": 4200},
+  "ata_smart_attributes": {
+    "table": [
+      {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100, "worst": 100,
+       "thresh": 10, "raw": {"value": 0, "string": "0"}},
+      {"id": 194, "name": "Temperature_Celsius", "value": 70, "worst": 60,
+       "thresh": 0, "raw": {"value": 30, "string": "30"}},
+      {"id": 197, "name": "Current_Pending_Sector", "value": 100, "worst": 100,
+       "thresh": 0, "raw": {"value": 0, "string": "0"}},
+      {"id": 198, "name": "Offline_Uncorrectable", "value": 100, "worst": 100,
+       "thresh": 0, "raw": {"value": 0, "string": "0"}}
+    ]
+  }
+}

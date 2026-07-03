@@ -1,0 +1,6 @@
+{
+  "signatures": [
+    {"device": "sda", "offset": "0x1fe", "type": "dos", "usage": "partition table"},
+    {"device": "sda", "offset": "0x0", "type": "ntfs", "usage": "filesystem", "uuid": "1234ABCD"}
+  ]
+}

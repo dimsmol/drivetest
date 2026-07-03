@@ -1,0 +1,85 @@
+"""Gather the real-world inputs the pure guards in :mod:`safety` consume.
+
+This is the IO bridge between :mod:`devices` (topology) and :mod:`safety`
+(decisions): it runs ``wipefs``/``findmnt``/``lsblk`` and reads ``/sys`` to
+build a :class:`~drivetest.safety.BlankProbe` and
+:class:`~drivetest.safety.RootInfo`, keeping the guard logic itself pure.
+"""
+
+from __future__ import annotations
+
+import os
+
+from .devices import Device
+from .proc import Runner
+from .safety import BlankProbe, RootInfo
+
+
+def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str = "/sys/block") -> BlankProbe:
+    """Probe a disk for any content. Fails closed: any read error sets
+    ``probe_error`` so the blank guard treats the disk as non-blank.
+    """
+    probe_error = False
+
+    try:
+        holders = tuple(sorted(os.listdir(os.path.join(sys_block, dev.name, "holders"))))
+    except FileNotFoundError:
+        holders = ()  # no holders dir == no holders
+    except OSError:
+        holders = ()
+        probe_error = True
+
+    signatures: tuple[str, ...] = ()
+    result = runner.run(["wipefs", "-n", "-J", dev.path])
+    if result.ok:
+        try:
+            sigs = result.json().get("signatures") or []
+            signatures = tuple(s.get("type", "?") for s in sigs)
+        except ValueError:
+            probe_error = True
+    else:
+        probe_error = True
+
+    children = tuple(child.name for child in dev.children)
+
+    return BlankProbe(
+        holders=holders,
+        signatures=signatures,
+        children=children,
+        probe_error=probe_error,
+    )
+
+
+def gather_root_info(runner: Runner) -> RootInfo:
+    """Determine the physical disk(s) backing ``/``.
+
+    Walks the root source down to its parent disks through any LVM/RAID/LUKS
+    layers (``lsblk -s``). If the root source is not a plain block device (ZFS,
+    overlay, network root), returns ``resolved=False`` so the system-disk guard
+    warns instead of trusting.
+    """
+    result = runner.run(["findmnt", "-J", "-o", "SOURCE,TARGET", "/"])
+    if not result.ok:
+        return RootInfo(source=None, resolved=False)
+    try:
+        filesystems = result.json().get("filesystems") or []
+    except ValueError:
+        return RootInfo(source=None, resolved=False)
+    if not filesystems:
+        return RootInfo(source=None, resolved=False)
+
+    source = filesystems[0].get("source")
+    if not source:
+        return RootInfo(source=None, resolved=False)
+    # Strip a btrfs subvolume suffix like "/dev/sda2[/@root]".
+    source = source.split("[", 1)[0]
+
+    if not source.startswith("/dev/"):
+        return RootInfo(source=source, resolved=False)
+
+    walk = runner.run(["lsblk", "-nrso", "NAME", source])
+    if not walk.ok:
+        # We know the source but can't resolve parents; treat as unresolved.
+        return RootInfo(source=source, resolved=False)
+    parents = tuple(line.strip() for line in walk.stdout.splitlines() if line.strip())
+    return RootInfo(source=source, parent_disks=parents, resolved=True)

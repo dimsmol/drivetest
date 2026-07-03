@@ -1,0 +1,16 @@
+{
+  "blockdevices": [
+    {
+      "name": "sda",
+      "path": "/dev/sda",
+      "type": "disk",
+      "size": 2000398934016,
+      "model": "ESD-S1C",
+      "serial": "TAD0NT005915",
+      "wwn": null,
+      "tran": "usb",
+      "mountpoints": [null],
+      "children": []
+    }
+  ]
+}
