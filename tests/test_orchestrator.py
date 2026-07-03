@@ -9,10 +9,24 @@ from __future__ import annotations
 import pytest
 
 from drivetest.cli import Options
-from drivetest.orchestrator import EXIT_ATTENTION, EXIT_OK, EXIT_REFUSED, RunContext, run
+from drivetest.fio import RegionResult
+from drivetest.orchestrator import (
+    _REGION_TO_VERIFY,
+    EXIT_ATTENTION,
+    EXIT_OK,
+    EXIT_REFUSED,
+    RunContext,
+    run,
+)
 from drivetest.thermal import ThermalPolicy
 
 from .conftest import FakeRunner, load_text
+
+
+def test_region_to_verify_mapping_is_exhaustive():
+    # Every fio region result must map to a verify status, or a write phase
+    # would KeyError at runtime.
+    assert set(_REGION_TO_VERIFY) == set(RegionResult)
 
 
 @pytest.fixture(autouse=True)

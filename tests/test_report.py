@@ -87,14 +87,6 @@ def test_verify_outcome_describe():
     assert partial.describe() == "PASS (parts 1-4 of 8 - not the whole drive)"
 
 
-def test_verify_status_maps_from_region_result_values():
-    # The two enums intentionally share values so one converts to the other.
-    from drivetest.fio import RegionResult
-
-    for rr in RegionResult:
-        assert VerifyStatus(rr.value).value == rr.value
-
-
 def test_format_gib():
     assert format_gib(50 * 1024**3) == "50GiB"
     assert format_gib(0) == "0GiB"

@@ -23,7 +23,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -38,7 +38,7 @@ ETA_OPTS = ["--eta=always", "--eta-newline=30s"]
 TERMINATE_GRACE_S = 10
 
 
-class RegionResult(StrEnum):
+class RegionResult(Enum):
     PASS = "PASS"
     FAIL = "FAIL"
     OVERHEAT = "OVERHEAT"

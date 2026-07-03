@@ -9,7 +9,7 @@ user saw on screen.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import TextIO
 
@@ -17,15 +17,17 @@ from .smart import SmartInfo
 from .units import GIB
 
 
-class SmartVerdict(StrEnum):
+class SmartVerdict(Enum):
     CLEAN = "clean"
     CHANGED = "CHANGED - health counters worsened"
     UNKNOWN = "unknown (post-run SMART read failed - device may have dropped)"
 
 
-class VerifyStatus(StrEnum):
-    """Outcome of the write+verify phase (values shared with fio's
-    ``RegionResult`` so one converts to the other).
+class VerifyStatus(Enum):
+    """Outcome of the write+verify phase.
+
+    ``SKIPPED`` is a read-only run; the rest correspond to fio's ``RegionResult``
+    (the orchestrator maps between them explicitly). Values are display text.
     """
 
     SKIPPED = "skipped"

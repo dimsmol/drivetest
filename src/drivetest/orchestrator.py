@@ -55,6 +55,14 @@ EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_ATTENTION = 2
 
+# Explicit bridge from a fio region result to a write-phase status, so the two
+# enums stay independent (no reliance on shared values). Exhaustiveness is tested.
+_REGION_TO_VERIFY: dict[RegionResult, VerifyStatus] = {
+    RegionResult.PASS: VerifyStatus.PASS,
+    RegionResult.FAIL: VerifyStatus.FAIL,
+    RegionResult.OVERHEAT: VerifyStatus.OVERHEAT,
+}
+
 
 @dataclass(frozen=True)
 class Options:
@@ -276,7 +284,7 @@ def _write_phase(
         else:
             result = RegionResult.OVERHEAT
         logger.log(f"   result: {result.value}")
-        return VerifyOutcome(VerifyStatus(result.value))
+        return VerifyOutcome(_REGION_TO_VERIFY[result])
 
     regions = plan_regions(dev.size, options.parts)
     selected = parse_only_spec(options.only, options.parts) if options.only else None
@@ -304,7 +312,7 @@ def _write_phase(
         ran += 1
         logger.log(f"   part {region.index}: {result.value}")
         if result is not RegionResult.PASS:
-            status = VerifyStatus(result.value)
+            status = _REGION_TO_VERIFY[result]
             logger.log(f"   stopping after part {region.index} ({result.value})")
             break
 
