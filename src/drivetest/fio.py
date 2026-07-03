@@ -211,21 +211,28 @@ class FioRunner:
                 sink.flush()
                 self._echo(line)
 
-        with open(log_path, "w") as logf:
-            assert proc.stdout is not None
-            reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
-            reader.start()
-            overheat = monitor_region(
-                is_alive=lambda: proc.poll() is None,
-                read_temp=self._read_temp,
-                policy=self._policy,
-                sleep=self._sleep,
-                kill=lambda: self._terminate(proc),
-                on_sample=self._on_sample,
-            )
-            reader.join()
-            returncode = proc.wait()
-        return classify_region(overheat, returncode)
+        # try/finally guarantees we never leave a write running against the
+        # device on an abnormal exit (Ctrl-C, an error in the monitor, a kill) -
+        # the shell version used a `trap ... INT TERM` for the same reason.
+        try:
+            with open(log_path, "w") as logf:
+                assert proc.stdout is not None
+                reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
+                reader.start()
+                overheat = monitor_region(
+                    is_alive=lambda: proc.poll() is None,
+                    read_temp=self._read_temp,
+                    policy=self._policy,
+                    sleep=self._sleep,
+                    kill=lambda: self._terminate(proc),
+                    on_sample=self._on_sample,
+                )
+                reader.join()
+                returncode = proc.wait()
+            return classify_region(overheat, returncode)
+        finally:
+            if proc.poll() is None:
+                self._terminate(proc)
 
     @staticmethod
     def _terminate(proc: subprocess.Popen[str]) -> None:

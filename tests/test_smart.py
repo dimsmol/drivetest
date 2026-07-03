@@ -34,6 +34,7 @@ def test_parse_ata_report_attributes():
     assert info.reallocated_sectors == 0
     assert info.pending_sectors == 0
     assert info.uncorrectable_errors == 0
+    assert info.crc_errors == 0
     assert info.power_on_hours == 4200
 
 

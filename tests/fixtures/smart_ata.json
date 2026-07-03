@@ -17,6 +17,8 @@
       {"id": 197, "name": "Current_Pending_Sector", "value": 100, "worst": 100,
        "thresh": 0, "raw": {"value": 0, "string": "0"}},
       {"id": 198, "name": "Offline_Uncorrectable", "value": 100, "worst": 100,
+       "thresh": 0, "raw": {"value": 0, "string": "0"}},
+      {"id": 199, "name": "UDMA_CRC_Error_Count", "value": 100, "worst": 100,
        "thresh": 0, "raw": {"value": 0, "string": "0"}}
     ]
   }

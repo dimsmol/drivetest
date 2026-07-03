@@ -17,7 +17,6 @@ BASE_TOOLS: tuple[str, ...] = (
     "findmnt",
     "fio",
     "wipefs",
-    "blockdev",
 )
 
 Which = Callable[[str], str | None]

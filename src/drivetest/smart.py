@@ -49,6 +49,7 @@ class SmartInfo:
     reallocated_sectors: int | None = None
     pending_sectors: int | None = None
     uncorrectable_errors: int | None = None
+    crc_errors: int | None = None
     raw: dict[str, Any] | None = None
 
     @property
@@ -60,12 +61,15 @@ class SmartInfo:
         """
         return bool(self.model or self.serial)
 
-    # The counters that, if they worsen across a run, mean trouble.
+    # The counters that, if they worsen across a run, mean trouble. crc_errors
+    # (ATA UDMA CRC) flags a flaky cable/bridge - the key signal when testing
+    # through a USB enclosure.
     HEALTH_COUNTERS = (
         "media_errors",
         "reallocated_sectors",
         "pending_sectors",
         "uncorrectable_errors",
+        "crc_errors",
     )
 
 
@@ -122,6 +126,7 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
         reallocated_sectors=_ata_attr(obj, 5, "Reallocated_Sector_Ct"),
         pending_sectors=_ata_attr(obj, 197, "Current_Pending_Sector"),
         uncorrectable_errors=_ata_attr(obj, 198, "Offline_Uncorrectable"),
+        crc_errors=_ata_attr(obj, 199, "UDMA_CRC_Error_Count"),
         raw=obj,
     )
 

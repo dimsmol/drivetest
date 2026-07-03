@@ -42,6 +42,15 @@ def test_reallocated_sectors_worsening_flagged():
     assert diff_smart(before, after)[0].field == "reallocated_sectors"
 
 
+def test_crc_errors_worsening_flagged():
+    # UDMA CRC increase = flaky USB bridge/cable during an enclosure test.
+    before = replace(HEALTHY, crc_errors=0)
+    after = replace(HEALTHY, crc_errors=7)
+    deltas = diff_smart(before, after)
+    assert deltas[0].field == "crc_errors"
+    assert classify_smart(after, deltas) is SmartVerdict.CHANGED
+
+
 def test_missing_counter_is_not_a_change():
     before = replace(HEALTHY, media_errors=None)
     after = replace(HEALTHY, media_errors=2)

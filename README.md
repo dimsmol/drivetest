@@ -6,7 +6,7 @@ The enclosure caps at ~1 GB/s (USB 3.2 Gen 2), so test in two stages: integrity/
 
 `drivetest` runs the battery: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder. It works for a drive in a USB enclosure (`/dev/sdX`) and for an NVMe drive in the M.2 slot (`/dev/nvmeXn1`).
 
-The tool is a small dependency-free Python package (`src/drivetest/`, run via the `./drivetest` wrapper). It shells out to `fio`, `smartctl`, `nvme`, `lsblk`, `wipefs` and `findmnt`, parsing their JSON output. Stdlib-only on purpose, so it runs from a minimal live USB. See [Development](#development) for the layout and how to test it. The original shell implementation is kept as `drive_test.sh` for reference; the Python tool supersedes it.
+The tool is a small dependency-free Python package (`src/drivetest/`, run via the `./drivetest` wrapper). It shells out to `fio`, `smartctl`, `nvme`, `lsblk`, `wipefs` and `findmnt`, parsing their JSON output. Stdlib-only on purpose, so it runs from a minimal live USB. See [Development](#development) for the layout and how to test it.
 
 ## Stage 1 - external, via Arion enclosure
 

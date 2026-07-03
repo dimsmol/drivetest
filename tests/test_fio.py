@@ -4,6 +4,7 @@ temperature monitor. A real-fio integration test covers the happy write path.
 
 from __future__ import annotations
 
+import io
 import shutil
 
 import pytest
@@ -129,6 +130,53 @@ def test_monitor_ignores_unreadable_temps():
         kill=lambda: pytest.fail("should not kill on unreadable temp"),
     )
     assert not overheat
+
+
+# --- run_region cleanup on abnormal exit ----------------------------------
+
+class _FakeProc:
+    """Minimal stand-in for a Popen fio process."""
+
+    def __init__(self, returncode=0):
+        self._alive = True
+        self._rc = returncode
+        self.stdout = io.StringIO("")  # empty: drain thread does nothing
+        self.terminated = False
+
+    def poll(self):
+        return None if self._alive else self._rc
+
+    def wait(self, timeout=None):
+        self._alive = False
+        return self._rc
+
+    def terminate(self):
+        self.terminated = True
+        self._alive = False
+
+    def kill(self):
+        self.terminated = True
+        self._alive = False
+
+
+def test_run_region_terminates_fio_if_monitor_errors(tmp_path):
+    # If anything throws mid-region, the finally must kill fio so no write is
+    # left running against the device (parity with the shell's INT/TERM trap).
+    proc = _FakeProc()
+
+    def boom():
+        raise RuntimeError("temperature source failed")
+
+    runner = FioRunner(
+        read_temp=boom,
+        policy=POLICY,
+        sleep=lambda _s: None,
+        popen=lambda _argv: proc,  # type: ignore[arg-type,return-value]
+        echo=lambda _line: None,
+    )
+    with pytest.raises(RuntimeError):
+        runner.run_region("/dev/sdx", Region(1, 0, 1024), tmp_path / "f.log")
+    assert proc.terminated
 
 
 # --- real fio integration (happy path) ------------------------------------
