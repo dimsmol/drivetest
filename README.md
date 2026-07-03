@@ -97,10 +97,10 @@ The import graph is acyclic and layered; `pyproject.toml` encodes the layering a
 Checks (all should be clean):
 
 ```bash
-PYTHONPATH=src pytest -q     # 118 tests
+PYTHONPATH=src pytest -q     # unit + integration tests
 ruff check src tests         # lint
 pyright                      # types (strict for src; tests relaxed - see pyproject.toml)
-lint-imports                 # layering / no import cycles (needs the dev extra)
+PYTHONPATH=src uvx --from import-linter lint-imports   # layering / no import cycles
 ```
 
 `pyproject.toml` defines a `drivetest` console script, so `pip install -e .` also exposes the `drivetest` command directly (the `./drivetest` wrapper just avoids needing an install).

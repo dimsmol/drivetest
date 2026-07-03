@@ -6,6 +6,8 @@ safety-refusal path without touching hardware or running real commands.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from drivetest.cli import Options
@@ -18,6 +20,7 @@ from drivetest.orchestrator import (
     RunContext,
     run,
 )
+from drivetest.proc import Result
 from drivetest.thermal import ThermalPolicy
 
 from .conftest import FakeRunner, load_text
@@ -109,8 +112,6 @@ class _SequencedSmartRunner(FakeRunner):
     def run(self, argv, *, input=None, timeout=None):
         argv_list = list(argv)
         if argv_list[0] == "smartctl" and "--json" in argv_list:
-            from drivetest.proc import Result
-
             self.calls.append(argv_list)
             return Result(tuple(argv_list), 0, next(self._seq), "")
         return super().run(argv, input=input, timeout=timeout)
@@ -118,8 +119,6 @@ class _SequencedSmartRunner(FakeRunner):
 
 def test_readonly_flags_worsened_smart(tmp_path):
     # after-snapshot shows new media errors -> ATTENTION even without a write.
-    import json
-
     good = load_text("smart_nvme.json")
     bad = json.dumps(
         {**json.loads(good),

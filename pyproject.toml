@@ -38,6 +38,7 @@ root_package = "drivetest"
 [[tool.importlinter.contracts]]
 name = "Layered architecture (no import cycles)"
 type = "layers"
+containers = ["drivetest"]
 layers = [
     "cli",
     "orchestrator",

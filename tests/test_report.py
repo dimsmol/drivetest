@@ -13,7 +13,7 @@ from drivetest.report import (
     diff_smart,
     format_gib,
 )
-from drivetest.smart import SmartInfo
+from drivetest.smart import SmartInfo, parse_smart_json
 
 from .conftest import load_json
 
@@ -67,8 +67,6 @@ def test_absent_report_is_unknown_not_clean():
 
 
 def test_real_report_stays_clean_when_unchanged():
-    from drivetest.smart import parse_smart_json
-
     info = parse_smart_json(load_json("smart_nvme.json"))
     assert classify_smart(info, []) is SmartVerdict.CLEAN
 
