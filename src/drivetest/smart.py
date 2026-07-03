@@ -99,16 +99,16 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
     nvme: dict[str, Any] = obj.get("nvme_smart_health_information_log") or {}
     temperature: dict[str, Any] = obj.get("temperature") or {}
     power_on: dict[str, Any] = obj.get("power_on_time") or {}
-    device: dict[str, Any] = obj.get("device") or {}
     status: dict[str, Any] = obj.get("smart_status") or {}
 
     temp = _int(temperature.get("current"))
     if temp is None:
         temp = _int(nvme.get("temperature"))
 
-    model: str | None = obj.get("model_name") or device.get("name")
+    # NB: use only model_name here - the device's "name" is the /dev path, which
+    # is present even in an error payload and would fool ``has_report``.
     return SmartInfo(
-        model=model,
+        model=obj.get("model_name"),
         serial=obj.get("serial_number"),
         firmware=obj.get("firmware_version"),
         health_passed=status.get("passed"),

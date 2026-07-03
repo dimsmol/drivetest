@@ -16,7 +16,7 @@ from .conftest import FakeRunner, load_text
 
 
 @pytest.fixture(autouse=True)
-def _no_missing_tools(monkeypatch):
+def _no_missing_tools(monkeypatch):  # pyright: ignore[reportUnusedFunction]  # autouse: pytest calls it
     # Decouple tests from what happens to be installed on the host.
     monkeypatch.setattr("drivetest.orchestrator.missing_tools", lambda required: [])
 

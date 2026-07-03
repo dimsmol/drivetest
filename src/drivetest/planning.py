@@ -43,7 +43,7 @@ def plan_regions(dev_bytes: int, parts: int) -> list[Region]:
         raise ValueError(f"dev_bytes must be > 0, got {dev_bytes}")
 
     part_size = dev_bytes // parts // MIB * MIB
-    if part_size == 0:
+    if parts > 1 and part_size == 0:
         raise ValueError(f"device too small ({dev_bytes} B) to split into {parts} parts")
 
     regions: list[Region] = []
