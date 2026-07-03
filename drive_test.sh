@@ -344,6 +344,16 @@ prestart_ok() {
   return 0
 }
 
+# True if the target is still the same physical device we started on. A USB
+# disconnect (often thermal) makes the node vanish or re-appear as a different
+# disk; either way this returns false so downstream steps can be skipped rather
+# than throwing confusing errors at a dead node.
+device_present() {
+  [[ -b "$DEV" ]] || return 1
+  [[ "$(dev_ident)" == "$IDENT" ]] || return 1
+  return 0
+}
+
 # --- 1. SMART baseline -----------------------------------------------------
 
 log ">> SMART baseline -> $LOG_DIR/smart_before.txt"
@@ -414,25 +424,47 @@ if [[ $DO_WRITE == 1 ]]; then
   log ""
 fi
 
+# If the device vanished during the write (e.g. a thermal USB disconnect), don't
+# run the read benchmarks or post-SMART against a dead / re-enumerated node -
+# that only produces confusing errors. Flag it and skip straight to the summary.
+DEV_GONE=0
+if [[ $DO_WRITE == 1 ]] && ! device_present; then
+  DEV_GONE=1
+  log "!! $DEV is gone or changed identity since the write started - it dropped off"
+  log "   the bus (commonly a thermal disconnect on a passive USB enclosure)."
+  log "   Skipping read benchmarks and post-SMART. Let it cool, replug, and resume"
+  log "   with --only <remaining parts>."
+  log ""
+fi
+
 # --- 3. read benchmarks (non-destructive) ----------------------------------
 
-log ">> sequential read (1M, qd32, 60s)"
-fio --name=seqread --filename="$DEV" --ioengine=libaio --direct=1 --bs=1M \
-    --iodepth=32 --rw=read --runtime=60 --time_based --size=100% \
-    --group_reporting "${ETA_OPTS[@]}" 2>&1 | tee "$LOG_DIR/fio_seqread.log" || true
-grep -E 'READ: bw=' "$LOG_DIR/fio_seqread.log" | head -1 | sed 's/^/  /' | tee -a "$SUMMARY" || true
+if (( DEV_GONE )); then
+  log ">> read benchmarks: skipped (device not present)"
+  log ""
+else
+  log ">> sequential read (1M, qd32, 60s)"
+  fio --name=seqread --filename="$DEV" --ioengine=libaio --direct=1 --bs=1M \
+      --iodepth=32 --rw=read --runtime=60 --time_based --size=100% \
+      --group_reporting "${ETA_OPTS[@]}" 2>&1 | tee "$LOG_DIR/fio_seqread.log" || true
+  grep -E 'READ: bw=' "$LOG_DIR/fio_seqread.log" | head -1 | sed 's/^/  /' | tee -a "$SUMMARY" || true
 
-log ">> random read (4k, qd64, 30s)"
-fio --name=randread --filename="$DEV" --ioengine=libaio --direct=1 --bs=4k \
-    --iodepth=64 --rw=randread --runtime=30 --time_based --size=100% \
-    --group_reporting "${ETA_OPTS[@]}" 2>&1 | tee "$LOG_DIR/fio_randread.log" || true
-grep -iE 'read:.*IOPS' "$LOG_DIR/fio_randread.log" | head -1 | sed 's/^/   /' | tee -a "$SUMMARY" || true
-log ""
+  log ">> random read (4k, qd64, 30s)"
+  fio --name=randread --filename="$DEV" --ioengine=libaio --direct=1 --bs=4k \
+      --iodepth=64 --rw=randread --runtime=30 --time_based --size=100% \
+      --group_reporting "${ETA_OPTS[@]}" 2>&1 | tee "$LOG_DIR/fio_randread.log" || true
+  grep -iE 'read:.*IOPS' "$LOG_DIR/fio_randread.log" | head -1 | sed 's/^/   /' | tee -a "$SUMMARY" || true
+  log ""
+fi
 
 # --- 4. SMART post + diff --------------------------------------------------
 
 log ">> SMART after -> $LOG_DIR/smart_after.txt"
-smartctl -x "${SMART_ARGS[@]}" "$DEV" >"$LOG_DIR/smart_after.txt" 2>&1 || true
+if (( DEV_GONE )); then
+  echo "device not present after run (disconnected) - SMART not read" >"$LOG_DIR/smart_after.txt"
+else
+  smartctl -x "${SMART_ARGS[@]}" "$DEV" >"$LOG_DIR/smart_after.txt" 2>&1 || true
+fi
 
 # Strip volatile lines (temps, timestamps, power-on) before diffing.
 scrub() { grep -viE 'temperature|power_on|power on|local time|data units|host (read|writ)|number of hours|percentage used' "$1"; }
@@ -461,7 +493,9 @@ log "full logs    : $LOG_DIR/"
 
 if [[ "$VERIFY_OK" == "FAIL" || "$VERIFY_OK" == "OVERHEAT" || "$SMART_FLAG" != "clean" ]]; then
   log ""
-  if [[ "$VERIFY_OK" == "OVERHEAT" ]]; then
+  if (( DEV_GONE )); then
+    log "RESULT: INCOMPLETE - device disconnected mid-run (likely thermal). Cool it, replug, and resume with --only."
+  elif [[ "$VERIFY_OK" == "OVERHEAT" ]]; then
     log "RESULT: INCOMPLETE - stopped on temperature ceiling; use more --parts (and/or a fan)."
   else
     log "RESULT: ATTENTION NEEDED - inspect logs above."
