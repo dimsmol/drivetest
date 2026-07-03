@@ -4,7 +4,9 @@ Test a new **WD SN850X 2TB** SSD and **Asus ROG Strix Arion** USB-C enclosure be
 
 The enclosure caps at ~1 GB/s (USB 3.2 Gen 2), so test in two stages: integrity/health externally now, real NVMe speed + the M.2 slot internally at swap time. The drive is new/empty, so destructive write tests are fine.
 
-`drive_test.sh` runs the battery: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder.
+`drivetest` runs the battery: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder. It works for a drive in a USB enclosure (`/dev/sdX`) and for an NVMe drive in the M.2 slot (`/dev/nvmeXn1`).
+
+The tool is a small dependency-free Python package (`src/drivetest/`, run via the `./drivetest` wrapper). It shells out to `fio`, `smartctl`, `nvme`, `lsblk`, `wipefs` and `findmnt`, parsing their JSON output. Stdlib-only on purpose, so it runs from a minimal live USB. See [Development](#development) for the layout and how to test it. The original shell implementation is kept as `drive_test.sh` for reference; the Python tool supersedes it.
 
 ## Stage 1 - external, via Arion enclosure
 
@@ -18,7 +20,7 @@ The enclosure caps at ~1 GB/s (USB 3.2 Gen 2), so test in two stages: integrity/
    ```
 3. Full destructive write/verify + health (wipes the drive; ~1.5-2.5 h):
    ```bash
-   sudo ./drive_test.sh --write --parts 8 /dev/sdX
+   sudo ./drivetest --write --parts 8 /dev/sdX
    ```
    Use `--quick` (first 50G) for a fast sanity pass first.
 
@@ -40,7 +42,7 @@ Do at swap time. Fit the SN850X, boot a **Linux live USB**, drive is `/dev/nvme0
 
 1. Native health + speed:
    ```bash
-   sudo ./drive_test.sh --write /dev/nvme0n1   # expect ~7000 MB/s seq read
+   sudo ./drivetest --write /dev/nvme0n1   # expect ~7000 MB/s seq read
    ```
 2. Built-in extended self-test (USB bridges can't pass this through):
    ```bash
@@ -64,9 +66,37 @@ Confirms full performance and that the slot/contacts are good. Then clone/reinst
 
 Read-only mode (no `--write`) never writes and skips these write-only refusals.
 
-Residual limits (inherent, not fixable in a shell script): a disk with only a signature that `libblkid`/`wipefs` doesn't recognize can look blank; `--force` bypasses the blank guard (including on ZFS/overlay-root systems where the system-disk walk can't verify); and device-open is not atomic, so a hostile replug in the millisecond between the final re-check and `fio` remains theoretically possible. Always re-check the node before running `--write`.
+Residual limits (inherent to any userspace tool): a disk with only a signature that `libblkid`/`wipefs` doesn't recognize can look blank; `--force` bypasses the blank guard (including on ZFS/overlay-root systems where the system-disk walk can't verify); and device-open is not atomic, so a hostile replug in the millisecond between the final re-check and `fio` remains theoretically possible. Always re-check the node before running `--write`.
 
 ## Notes
 
 - Always re-check the device node after plugging in; `--write` erases the target.
 - Long `fio` phases print a live progress line every 30s (percent + speed + ETA for the write pass; a time countdown for the read benchmarks). Full per-phase output is saved under the `drive_test_*` log folder.
+
+## Development
+
+Dependency-free `src/` layout package. The heavy logic (parsing, safety decisions, region math, result classification) is in pure functions, unit-tested against JSON fixtures captured from real hardware - no device needed to run the tests.
+
+Modules, each useful on its own:
+
+- `proc` - a thin, mockable subprocess seam (run a command, parse JSON).
+- `tools` - check that required external CLIs are present.
+- `devices` - enumerate block devices and model their identity (`lsblk`).
+- `safety` - the destructive-write guards (all pure decisions over gathered data).
+- `smart` - read SMART/health/temperature via `smartctl`/`nvme`.
+- `thermal` - thermal pacing policy for passively-cooled enclosures.
+- `planning` - split a drive into regions and parse `--only` specs.
+- `fio` - build and run fio write+verify and read benchmarks.
+- `probe` - gather the IO inputs (`wipefs`/`findmnt`/`/sys`) the guards consume.
+- `report` - summary, SMART diff and result classification.
+- `cli` / `orchestrator` - argument parsing and the end-to-end run.
+
+Checks (all should be clean):
+
+```bash
+PYTHONPATH=src pytest -q     # 113 tests
+ruff check src tests         # lint
+pyright                      # types (strict for src; tests relaxed - see pyproject.toml)
+```
+
+`pyproject.toml` defines a `drivetest` console script, so `pip install -e .` also exposes the `drivetest` command directly (the `./drivetest` wrapper just avoids needing an install).

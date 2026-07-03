@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Run drivetest without installing it.
+
+Puts the in-repo ``src/`` on the import path and calls the CLI, so the tool can
+be run straight from a checkout (handy on a live USB or a fresh machine):
+
+    sudo ./drivetest /dev/sdb
+    sudo ./drivetest --write --parts 8 /dev/sdb
+
+No third-party dependencies - any Python >= 3.11 works. If root's PATH lacks a
+recent python, invoke it explicitly, e.g. ``sudo "$(command -v python3)" ./drivetest ...``.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+
+from drivetest.cli import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
