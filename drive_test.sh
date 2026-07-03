@@ -40,10 +40,19 @@ done
 [[ $EUID -eq 0 ]] || { echo "error: run as root (sudo)" >&2; exit 1; }
 [[ -b "$DEV" ]] || { echo "error: $DEV is not a block device" >&2; exit 1; }
 
-# fio needed only for the write/verify and benchmarks; check up front.
-for t in smartctl lsblk findmnt fio; do
-  command -v "$t" >/dev/null || { echo "error: missing tool: $t" >&2; exit 1; }
+# Check every external tool the script relies on, up front, and report all that
+# are missing at once. nvme-cli is only needed for an NVMe target.
+REQUIRED=(smartctl lsblk findmnt fio awk grep sed sort diff tee date mkdir)
+[[ "$DEV" == *nvme* ]] && REQUIRED+=(nvme)
+missing=()
+for t in "${REQUIRED[@]}"; do
+  command -v "$t" >/dev/null 2>&1 || missing+=("$t")
 done
+if (( ${#missing[@]} )); then
+  echo "error: missing required tools: ${missing[*]}" >&2
+  echo "install them, e.g.: nix-shell -p fio smartmontools nvme-cli usbutils" >&2
+  exit 1
+fi
 
 # --- safety checks ---------------------------------------------------------
 
