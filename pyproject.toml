@@ -47,4 +47,23 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.pyright]
 include = ["src", "tests"]
 pythonVersion = "3.11"
-typeCheckingMode = "standard"
+# The library is checked in strict mode. Tests keep real type-error checking
+# (wrong arguments, bad calls, return types) but relax the "everything must be
+# annotated" family below - unit tests would otherwise need type annotations on
+# every fixture parameter and lambda, which is pure ceremony. This pyright
+# honors per-environment rule overrides (but not a per-environment
+# typeCheckingMode), so the rules are listed explicitly.
+typeCheckingMode = "strict"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportMissingParameterType = "none"
+reportUnknownParameterType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownLambdaType = "none"
+reportUntypedFunctionDecorator = "none"
+reportMissingTypeArgument = "none"
+reportPrivateUsage = "none"       # tests may exercise internal helpers
+reportUnusedFunction = "none"     # autouse fixtures read as "unused"

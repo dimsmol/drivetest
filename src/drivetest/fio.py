@@ -41,6 +41,14 @@ class RegionResult(StrEnum):
     OVERHEAT = "OVERHEAT"
 
 
+def _ignore_sample(_temp: Temp) -> None:
+    pass
+
+
+def _print_line(line: str) -> None:
+    print(line, end="")
+
+
 @dataclass(frozen=True)
 class ReadStats:
     """Parsed result of a read benchmark."""
@@ -103,14 +111,15 @@ def build_read_argv(dev_path: str, kind: str) -> list[str]:
 
 def parse_read_json(obj: dict[str, Any], kind: str) -> ReadStats:
     """Extract bandwidth and IOPS from fio's JSON for a read job."""
-    jobs = obj.get("jobs") or []
+    jobs: list[Any] = obj.get("jobs") or []
     if not jobs:
         raise ValueError("fio JSON has no jobs")
-    read = jobs[0].get("read") or {}
+    job: dict[str, Any] = jobs[0] or {}
+    read: dict[str, Any] = job.get("read") or {}
     bw_bytes = read.get("bw_bytes")
     if bw_bytes is None:
         # Older fio reports bw in KiB/s only.
-        bw_bytes = int((read.get("bw") or 0) * 1024)
+        bw_bytes = (read.get("bw") or 0) * 1024
     return ReadStats(kind=kind, bw_bytes=int(bw_bytes), iops=float(read.get("iops") or 0.0))
 
 
@@ -136,7 +145,7 @@ def monitor_region(
     all of process liveness, temperature, sleeping and killing are injected, so
     the ceiling logic is tested without a real process.
     """
-    observe = on_sample or (lambda _t: None)
+    observe = on_sample or _ignore_sample
     while is_alive():
         temp = read_temp()
         observe(temp)
@@ -150,7 +159,7 @@ def monitor_region(
 PopenFactory = Callable[[list[str]], "subprocess.Popen[str]"]
 
 
-def _default_popen(argv: list[str]) -> subprocess.Popen[str]:
+def default_popen(argv: list[str]) -> subprocess.Popen[str]:
     return subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -174,7 +183,7 @@ class FioRunner:
         read_temp: Callable[[], Temp],
         policy: ThermalPolicy,
         sleep: Callable[[float], None] = time.sleep,
-        popen: PopenFactory = _default_popen,
+        popen: PopenFactory = default_popen,
         echo: Callable[[str], None] | None = None,
         run_json: Callable[[list[str]], dict[str, Any]] | None = None,
         on_sample: Callable[[Temp], None] | None = None,
@@ -183,7 +192,7 @@ class FioRunner:
         self._policy = policy
         self._sleep = sleep
         self._popen = popen
-        self._echo = echo or (lambda line: print(line, end=""))
+        self._echo = echo or _print_line
         self._run_json = run_json
         self._on_sample = on_sample
 

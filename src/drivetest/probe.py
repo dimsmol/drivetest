@@ -9,6 +9,7 @@ build a :class:`~drivetest.safety.BlankProbe` and
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from .devices import Device
 from .proc import Runner
@@ -33,8 +34,13 @@ def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str = "/sys/bl
     result = runner.run(["wipefs", "-n", "-J", dev.path])
     if result.ok:
         try:
-            sigs = result.json().get("signatures") or []
-            signatures = tuple(s.get("type", "?") for s in sigs)
+            data: dict[str, Any] = result.json()
+            sigs: list[Any] = data.get("signatures") or []
+            found: list[str] = []
+            for sig in sigs:
+                sig_obj: dict[str, Any] = sig or {}
+                found.append(str(sig_obj.get("type", "?")))
+            signatures = tuple(found)
         except ValueError:
             probe_error = True
     else:
@@ -62,17 +68,19 @@ def gather_root_info(runner: Runner) -> RootInfo:
     if not result.ok:
         return RootInfo(source=None, resolved=False)
     try:
-        filesystems = result.json().get("filesystems") or []
+        data: dict[str, Any] = result.json()
+        filesystems: list[Any] = data.get("filesystems") or []
     except ValueError:
         return RootInfo(source=None, resolved=False)
     if not filesystems:
         return RootInfo(source=None, resolved=False)
 
-    source = filesystems[0].get("source")
-    if not source:
+    first: dict[str, Any] = filesystems[0] or {}
+    raw_source = first.get("source")
+    if not raw_source:
         return RootInfo(source=None, resolved=False)
     # Strip a btrfs subvolume suffix like "/dev/sda2[/@root]".
-    source = source.split("[", 1)[0]
+    source = str(raw_source).split("[", 1)[0]
 
     if not source.startswith("/dev/"):
         return RootInfo(source=source, resolved=False)

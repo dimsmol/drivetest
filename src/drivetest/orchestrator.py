@@ -28,8 +28,8 @@ from .fio import (
     FioRunner,
     PopenFactory,
     RegionResult,
-    _default_popen,
     build_read_argv,
+    default_popen,
     parse_read_json,
 )
 from .planning import parse_only_spec, plan_regions, quick_region
@@ -63,7 +63,7 @@ class RunContext:
     policy: ThermalPolicy = field(default_factory=ThermalPolicy)
     workdir: Path = field(default_factory=lambda: Path("."))
     sleep: Callable[[float], None] = time.sleep
-    popen: PopenFactory = _default_popen
+    popen: PopenFactory = default_popen
     confirm: Callable[[str], str] = input
     stream: TextIO | None = None
     stamp: str | None = None

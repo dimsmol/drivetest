@@ -57,6 +57,14 @@ def can_start(temp: Temp, policy: ThermalPolicy) -> bool:
 Sample = Callable[[Temp], None]
 
 
+def _ignore_sample(_temp: Temp) -> None:
+    pass
+
+
+def _ignore_log(_message: str) -> None:
+    pass
+
+
 @dataclass
 class CooldownOutcome:
     reached_target: bool
@@ -85,8 +93,8 @@ class ThermalController:
         self.policy = policy
         self._read_temp = read_temp
         self._sleep = sleep
-        self._on_sample = on_sample or (lambda _t: None)
-        self._log = log or (lambda _m: None)
+        self._on_sample = on_sample or _ignore_sample
+        self._log = log or _ignore_log
 
     def _sample(self) -> Temp:
         temp = self._read_temp()

@@ -8,10 +8,11 @@ against captured real output.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from .proc import Runner, run_json
 
@@ -80,9 +81,10 @@ def _clean(value: Any) -> str | None:
 
 
 def _device_from_node(node: dict[str, Any]) -> Device:
-    raw_mounts = node.get("mountpoints") or []
-    mountpoints = tuple(mp for mp in raw_mounts if mp)
-    children = tuple(_device_from_node(c) for c in node.get("children") or [])
+    raw_mounts: list[Any] = node.get("mountpoints") or []
+    mountpoints = tuple(str(mp) for mp in raw_mounts if mp)
+    raw_children: list[Any] = node.get("children") or []
+    children = tuple(_device_from_node(child) for child in raw_children)
     size = node.get("size")
     return Device(
         path=str(node.get("path") or f"/dev/{node.get('name')}"),
@@ -100,12 +102,12 @@ def _device_from_node(node: dict[str, Any]) -> Device:
 
 def parse_lsblk(data: dict[str, Any] | str) -> list[Device]:
     """Parse ``lsblk -Jb`` output (a dict or JSON string) into devices."""
-    if isinstance(data, str):
-        import json
-
-        data = json.loads(data)
-    assert isinstance(data, dict)
-    return [_device_from_node(node) for node in data.get("blockdevices") or []]
+    parsed: Any = json.loads(data) if isinstance(data, str) else data
+    if not isinstance(parsed, dict):
+        raise ValueError("lsblk output is not a JSON object")
+    obj = cast("dict[str, Any]", parsed)
+    nodes: list[Any] = obj.get("blockdevices") or []
+    return [_device_from_node(node) for node in nodes]
 
 
 def canonical_path(path: str) -> str:
@@ -121,7 +123,7 @@ def list_devices(runner: Runner, *, path: str | None = None) -> list[Device]:
     argv = ["lsblk", "-Jb", "-o", LSBLK_COLUMNS]
     if path is not None:
         argv.append(path)
-    data = run_json(runner, argv)
+    data: Any = run_json(runner, argv)
     return parse_lsblk(data)
 
 

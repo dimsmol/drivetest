@@ -80,10 +80,12 @@ def _int(value: Any) -> int | None:
 
 def _ata_attr(obj: dict[str, Any], attr_id: int, name: str) -> int | None:
     """Pull an ATA SMART attribute's raw value by id or (fallback) name."""
-    table = (obj.get("ata_smart_attributes") or {}).get("table") or []
+    attrs: dict[str, Any] = obj.get("ata_smart_attributes") or {}
+    table: list[Any] = attrs.get("table") or []
     for row in table:
-        if row.get("id") == attr_id or row.get("name") == name:
-            raw = row.get("raw") or {}
+        row_obj: dict[str, Any] = row or {}
+        if row_obj.get("id") == attr_id or row_obj.get("name") == name:
+            raw: dict[str, Any] = row_obj.get("raw") or {}
             return _int(raw.get("value"))
     return None
 
@@ -94,23 +96,29 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
     Handles both the NVMe health log and the ATA attribute table; picks
     temperature from the top-level ``temperature.current`` when present.
     """
-    nvme = obj.get("nvme_smart_health_information_log") or {}
-    temp = _int((obj.get("temperature") or {}).get("current"))
+    nvme: dict[str, Any] = obj.get("nvme_smart_health_information_log") or {}
+    temperature: dict[str, Any] = obj.get("temperature") or {}
+    power_on: dict[str, Any] = obj.get("power_on_time") or {}
+    device: dict[str, Any] = obj.get("device") or {}
+    status: dict[str, Any] = obj.get("smart_status") or {}
+
+    temp = _int(temperature.get("current"))
     if temp is None:
         temp = _int(nvme.get("temperature"))
 
+    model: str | None = obj.get("model_name") or device.get("name")
     return SmartInfo(
-        model=obj.get("model_name") or obj.get("device", {}).get("name"),
+        model=model,
         serial=obj.get("serial_number"),
         firmware=obj.get("firmware_version"),
-        health_passed=(obj.get("smart_status") or {}).get("passed"),
+        health_passed=status.get("passed"),
         temperature_c=temp,
         media_errors=_int(nvme.get("media_errors")),
         available_spare=_int(nvme.get("available_spare")),
         percentage_used=_int(nvme.get("percentage_used")),
         unsafe_shutdowns=_int(nvme.get("unsafe_shutdowns")),
         critical_warning=_int(nvme.get("critical_warning")),
-        power_on_hours=_int((obj.get("power_on_time") or {}).get("hours")),
+        power_on_hours=_int(power_on.get("hours")),
         reallocated_sectors=_ata_attr(obj, 5, "Reallocated_Sector_Ct"),
         pending_sectors=_ata_attr(obj, 197, "Current_Pending_Sector"),
         uncorrectable_errors=_ata_attr(obj, 198, "Offline_Uncorrectable"),
@@ -138,7 +146,7 @@ def read_smart(runner: Runner, dev_path: str, mode: list[str]) -> SmartInfo:
     """
     result = runner.run(["smartctl", "--json", "-x", *mode, dev_path])
     try:
-        obj = result.json()
+        obj: dict[str, Any] = result.json()
     except ValueError:
         return SmartInfo(raw=None)
     return parse_smart_json(obj)
@@ -155,7 +163,8 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
         result = runner.run(["nvme", "smart-log", dev_path, "-o", "json"])
         if result.ok:
             try:
-                temp = _kelvin_or_celsius(result.json().get("temperature"))
+                payload: dict[str, Any] = result.json()
+                temp = _kelvin_or_celsius(payload.get("temperature"))
             except ValueError:
                 temp = None
     if temp is None:
