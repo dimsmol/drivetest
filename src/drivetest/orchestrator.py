@@ -25,6 +25,7 @@ from .devices import Device, all_serials, find_device, list_devices
 from .fio import (
     FioRunner,
     PopenFactory,
+    ReadKind,
     RegionResult,
     build_read_argv,
     default_popen,
@@ -372,17 +373,16 @@ def _smart_after(
 
 
 def _read_benchmarks(runner: Runner, dev: Device, logger: Logger, log_dir: Path) -> None:
-    for kind, label in (("seqread", "sequential read (1M, qd32, 60s)"),
-                        ("randread", "random read (4k, qd64, 30s)")):
-        logger.log(f">> {label}")
+    for kind in ReadKind:
+        logger.log(f">> {kind.label}")
         result = runner.run(build_read_argv(dev.path, kind))
-        (log_dir / f"fio_{kind}.json").write_text(result.stdout)
+        (log_dir / f"fio_{kind.value}.json").write_text(result.stdout)
         try:
             stats = parse_read_json(result.json(), kind)
         except ValueError:
             logger.log("   (could not parse fio output)")
             continue
-        if kind == "seqread":
+        if kind is ReadKind.SEQ:
             logger.log(f"   bandwidth: {stats.bw_mb:.0f} MB/s")
         else:
             logger.log(f"   IOPS: {stats.iops:.0f} ({stats.bw_mb:.0f} MB/s)")

@@ -12,6 +12,7 @@ import pytest
 from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.fio import (
     FioRunner,
+    ReadKind,
     RegionResult,
     build_read_argv,
     build_writeverify_argv,
@@ -40,58 +41,62 @@ def test_writeverify_argv_has_verify_and_region():
 
 
 def test_read_argv_shapes():
-    seq = build_read_argv("/dev/sdx", "seqread")
+    seq = build_read_argv("/dev/sdx", ReadKind.SEQ)
     assert "--bs=1M" in seq and "--rw=read" in seq and "--output-format=json" in seq
-    rnd = build_read_argv("/dev/sdx", "randread")
+    # cache-bypass and time-bounded whole-device pass are essential to the benchmark
+    assert "--direct=1" in seq and "--time_based" in seq and "--size=100%" in seq
+    assert "--name=seqread" in seq
+    rnd = build_read_argv("/dev/sdx", ReadKind.RAND)
     assert "--bs=4k" in rnd and "--rw=randread" in rnd
 
 
-def test_read_argv_rejects_unknown_kind():
-    with pytest.raises(ValueError):
-        build_read_argv("/dev/sdx", "bogus")
+def test_read_kind_label():
+    assert ReadKind.SEQ.label == "sequential read (1M, qd32, 60s)"
+    assert ReadKind.RAND.label == "random read (4k, qd64, 30s)"
 
 
 # --- JSON parsing ---------------------------------------------------------
 
 def test_parse_seqread_json():
-    stats = parse_read_json(load_json("fio_seqread.json"), "seqread")
+    stats = parse_read_json(load_json("fio_seqread.json"), ReadKind.SEQ)
+    assert stats.kind is ReadKind.SEQ
     assert stats.bw_bytes == 1002438656
     assert round(stats.bw_mb) == 1002
     assert round(stats.iops) == 956
 
 
 def test_parse_randread_json():
-    stats = parse_read_json(load_json("fio_randread.json"), "randread")
+    stats = parse_read_json(load_json("fio_randread.json"), ReadKind.RAND)
     assert round(stats.iops) == 69905
 
 
 def test_parse_read_json_falls_back_to_kib_bw():
     # older fio without bw_bytes
     obj = {"jobs": [{"read": {"bw": 1000, "iops": 10}}]}
-    stats = parse_read_json(obj, "seqread")
+    stats = parse_read_json(obj, ReadKind.SEQ)
     assert stats.bw_bytes == 1000 * KIB
 
 
 def test_parse_read_json_no_jobs():
     with pytest.raises(ValueError):
-        parse_read_json({"jobs": []}, "seqread")
+        parse_read_json({"jobs": []}, ReadKind.SEQ)
 
 
 def test_parse_read_json_raises_on_job_error():
     # A non-zero fio job error means the run failed; its numbers are unreliable.
     with pytest.raises(ValueError):
-        parse_read_json({"jobs": [{"error": 5, "read": {"bw_bytes": 1, "iops": 1}}]}, "seqread")
+        parse_read_json({"jobs": [{"error": 5, "read": {"bw_bytes": 1, "iops": 1}}]}, ReadKind.SEQ)
 
 
 def test_parse_read_json_raises_on_missing_bandwidth():
     # Missing bandwidth must not be reported as a genuine 0 B/s.
     with pytest.raises(ValueError):
-        parse_read_json({"jobs": [{"read": {"iops": 10}}]}, "seqread")
+        parse_read_json({"jobs": [{"read": {"iops": 10}}]}, ReadKind.SEQ)
 
 
 def test_parse_read_json_raises_on_missing_iops():
     with pytest.raises(ValueError):
-        parse_read_json({"jobs": [{"read": {"bw_bytes": 1000}}]}, "seqread")
+        parse_read_json({"jobs": [{"read": {"bw_bytes": 1000}}]}, ReadKind.SEQ)
 
 
 # --- region classification ------------------------------------------------

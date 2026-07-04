@@ -53,11 +53,43 @@ def _print_line(line: str) -> None:
     print(line, end="")
 
 
+class ReadKind(Enum):
+    """A read benchmark variant; its value is the fio job name / log-file id."""
+
+    SEQ = "seqread"
+    RAND = "randread"
+
+    @property
+    def label(self) -> str:
+        return _READ_SHAPES[self].label
+
+
+@dataclass(frozen=True)
+class _ReadShape:
+    """The fio parameters and display label for one read benchmark variant."""
+
+    bs: str
+    iodepth: int
+    rw: str
+    runtime_s: int
+    label: str
+
+
+_READ_SHAPES: dict[ReadKind, _ReadShape] = {
+    ReadKind.SEQ: _ReadShape(
+        bs="1M", iodepth=32, rw="read", runtime_s=60, label="sequential read (1M, qd32, 60s)"
+    ),
+    ReadKind.RAND: _ReadShape(
+        bs="4k", iodepth=64, rw="randread", runtime_s=30, label="random read (4k, qd64, 30s)"
+    ),
+}
+
+
 @dataclass(frozen=True)
 class ReadStats:
     """Parsed result of a read benchmark."""
 
-    kind: str            # "seqread" | "randread"
+    kind: ReadKind
     bw_bytes: int        # bandwidth, bytes/sec
     iops: float
 
@@ -88,24 +120,23 @@ def build_writeverify_argv(dev_path: str, region: Region) -> list[str]:
     ]
 
 
-def build_read_argv(dev_path: str, kind: str) -> list[str]:
+def build_read_argv(dev_path: str, kind: ReadKind) -> list[str]:
     """fio argv for a read benchmark (JSON output).
 
-    ``kind`` is "seqread" (1M, qd32, 60s) or "randread" (4k, qd64, 30s).
+    The per-variant block size, queue depth, mode and runtime come from
+    ``_READ_SHAPES``.
     """
-    if kind == "seqread":
-        shape = ["--bs=1M", "--iodepth=32", "--rw=read", "--runtime=60"]
-    elif kind == "randread":
-        shape = ["--bs=4k", "--iodepth=64", "--rw=randread", "--runtime=30"]
-    else:
-        raise ValueError(f"unknown read kind: {kind}")
+    shape = _READ_SHAPES[kind]
     return [
         "fio",
-        f"--name={kind}",
+        f"--name={kind.value}",
         f"--filename={dev_path}",
         "--ioengine=libaio",
         "--direct=1",
-        *shape,
+        f"--bs={shape.bs}",
+        f"--iodepth={shape.iodepth}",
+        f"--rw={shape.rw}",
+        f"--runtime={shape.runtime_s}",
         "--time_based",
         "--size=100%",
         "--group_reporting",
@@ -113,7 +144,7 @@ def build_read_argv(dev_path: str, kind: str) -> list[str]:
     ]
 
 
-def parse_read_json(obj: dict[str, Any], kind: str) -> ReadStats:
+def parse_read_json(obj: dict[str, Any], kind: ReadKind) -> ReadStats:
     """Extract bandwidth and IOPS from fio's JSON for a read job.
 
     Raises ``ValueError`` if the job failed (non-zero ``error``) or the numbers
@@ -258,7 +289,7 @@ class FioRunner:
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    def run_read(self, dev_path: str, kind: str) -> ReadStats:
+    def run_read(self, dev_path: str, kind: ReadKind) -> ReadStats:
         """Run a read benchmark and return parsed bandwidth/IOPS."""
         if self._run_json is None:
             raise RuntimeError("FioRunner needs run_json to run read benchmarks")
