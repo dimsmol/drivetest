@@ -54,6 +54,24 @@ def test_blank_probe_fails_closed_when_sys_dir_missing(fake_runner: FakeRunner, 
     assert not probe.is_blank
 
 
+def test_blank_probe_fails_closed_on_malformed_wipefs_json(fake_runner: FakeRunner, tmp_path):
+    # wipefs exits 0 but prints non-JSON: we can't confirm the disk is blank, so
+    # the guard must fail closed rather than assume "no signatures".
+    fake_runner.add("wipefs", stdout="not json at all")
+    probe = gather_blank_probe(fake_runner, _disk(), sys_block=_sys_block(tmp_path))
+    assert probe.probe_error
+    assert not probe.is_blank
+
+
+def test_blank_probe_fails_closed_on_non_object_wipefs_json(fake_runner: FakeRunner, tmp_path):
+    # Valid JSON that isn't an object (null/list/number): .get would raise, so the
+    # guard must treat it as an errored probe, not "no signatures, looks blank".
+    fake_runner.add("wipefs", stdout="null")
+    probe = gather_blank_probe(fake_runner, _disk(), sys_block=_sys_block(tmp_path))
+    assert probe.probe_error
+    assert not probe.is_blank
+
+
 def test_blank_probe_reports_holders(fake_runner: FakeRunner, tmp_path):
     fake_runner.add("wipefs", stdout='{"signatures": []}')
     probe = gather_blank_probe(
@@ -108,6 +126,27 @@ def test_root_info_unresolved_when_findmnt_fails(fake_runner: FakeRunner):
     fake_runner.add("findmnt", stdout="", returncode=1)
     root = gather_root_info(fake_runner)
     assert not root.resolved
+
+
+def test_root_info_unresolved_on_non_object_findmnt_json(fake_runner: FakeRunner):
+    # findmnt prints valid JSON that isn't an object: .get would raise, so treat
+    # the root as unresolved rather than crash.
+    fake_runner.add("findmnt", stdout="null")
+    root = gather_root_info(fake_runner)
+    assert not root.resolved
+
+
+def test_root_info_unresolved_when_lsblk_walk_fails(fake_runner: FakeRunner):
+    # findmnt names a /dev source but the lsblk parent walk fails: we know the
+    # source but can't map it to a disk, so the root is not established.
+    fake_runner.add(
+        "findmnt",
+        stdout='{"filesystems": [{"source": "/dev/sda2", "target": "/"}]}',
+    )
+    fake_runner.add("lsblk", stdout="", returncode=1)
+    root = gather_root_info(fake_runner)
+    assert not root.resolved
+    assert root.source == "/dev/sda2"
 
 
 def test_root_info_unresolved_when_walk_is_empty(fake_runner: FakeRunner):

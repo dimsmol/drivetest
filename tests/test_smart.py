@@ -49,6 +49,29 @@ def test_parse_ata_report_attributes():
     assert info.power_on_hours == 4200
 
 
+def test_parse_nvme_failing_report():
+    # A genuinely failing NVMe drive must parse as FAILED with its nonzero
+    # counters intact - the parser boundary, not just hand-built SmartInfo values.
+    info = parse_smart_json(load_json("smart_nvme_failing.json"))
+    assert info.has_report
+    assert info.health_passed is False
+    assert info.critical_warning == 4
+    assert info.media_errors == 12
+    assert info.available_spare == 5
+    assert info.percentage_used == 98
+
+
+def test_parse_ata_failing_report():
+    # A failing SATA drive: FAILED self-assessment and nonzero sector/CRC counters
+    # must be extracted from the attribute table (raw values), not read as 0.
+    info = parse_smart_json(load_json("smart_ata_failing.json"))
+    assert info.health_passed is False
+    assert info.reallocated_sectors == 8
+    assert info.pending_sectors == 3
+    assert info.uncorrectable_errors == 2
+    assert info.crc_errors == 15
+
+
 def test_ata_attr_matches_by_name_when_id_differs():
     # The id-or-name fallback: a row whose id doesn't match but whose name does.
     obj = {

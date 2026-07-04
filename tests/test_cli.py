@@ -8,6 +8,7 @@ import pytest
 
 from drivetest.cli import main, parse_args
 from drivetest.config import DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY
+from drivetest.orchestrator import EXIT_REFUSED
 
 
 def test_minimal_readonly():
@@ -105,3 +106,13 @@ def test_main_defaults_workdir_to_cwd(monkeypatch):
     captured = _run_capturing_workdir(monkeypatch)
     main(["/dev/sdb"])
     assert captured["workdir"] == Path(".")
+
+
+def test_main_refuses_when_not_root(monkeypatch):
+    # A destructive tool must not proceed without root: main returns EXIT_REFUSED
+    # and never reaches run(), regardless of the (valid) arguments.
+    monkeypatch.setattr("drivetest.cli.os.geteuid", lambda: 1000)
+    called: list[object] = []
+    monkeypatch.setattr("drivetest.cli.run", lambda _opts, ctx: called.append(ctx) or 0)
+    assert main(["/dev/sdb"]) == EXIT_REFUSED
+    assert called == []  # never reached the run

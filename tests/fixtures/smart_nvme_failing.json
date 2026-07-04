@@ -1,0 +1,28 @@
+{
+  "json_format_version": [1, 0],
+  "device": {"name": "/dev/sda", "type": "sntasmedia", "protocol": "NVMe"},
+  "model_name": "WD_BLACK SN850X 2000GB",
+  "serial_number": "255106803016",
+  "firmware_version": "620311WD",
+  "user_capacity": {"blocks": 3907029168, "bytes": 2000398934016},
+  "smart_status": {"passed": false, "nvme": {"value": 4}},
+  "temperature": {"current": 61},
+  "power_on_time": {"hours": 9001},
+  "power_cycle_count": 42,
+  "nvme_smart_health_information_log": {
+    "critical_warning": 4,
+    "temperature": 61,
+    "available_spare": 5,
+    "available_spare_threshold": 10,
+    "percentage_used": 98,
+    "data_units_read": 12345,
+    "data_units_written": 3885063,
+    "host_reads": 100,
+    "host_writes": 200,
+    "media_errors": 12,
+    "num_err_log_entries": 37,
+    "warning_temp_time": 0,
+    "critical_comp_time": 0,
+    "unsafe_shutdowns": 5
+  }
+}
