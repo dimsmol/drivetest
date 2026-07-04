@@ -11,6 +11,7 @@ common ones and remember the ``-d`` args that work (:func:`detect_access_mode`).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,16 +77,19 @@ class SmartInfo:
         """
         return bool(self.model or self.serial)
 
-    # The counters that, if they worsen across a run, mean trouble. crc_errors
-    # (ATA UDMA CRC) flags a flaky cable/bridge - the key signal when testing
-    # through a USB enclosure.
-    HEALTH_COUNTERS = (
-        "media_errors",
-        "reallocated_sectors",
-        "pending_sectors",
-        "uncorrectable_errors",
-        "crc_errors",
-    )
+
+# The counters that, if they worsen across a run, mean trouble. Each pairs the
+# field's display name with a typed accessor, so a rename is caught by the type
+# checker instead of failing at runtime the way a string ``getattr`` would.
+# crc_errors (ATA UDMA CRC) flags a flaky cable/bridge - the key signal when
+# testing through a USB enclosure.
+HEALTH_COUNTERS: tuple[tuple[str, Callable[[SmartInfo], int | None]], ...] = (
+    ("media_errors", lambda i: i.media_errors),
+    ("reallocated_sectors", lambda i: i.reallocated_sectors),
+    ("pending_sectors", lambda i: i.pending_sectors),
+    ("uncorrectable_errors", lambda i: i.uncorrectable_errors),
+    ("crc_errors", lambda i: i.crc_errors),
+)
 
 
 def _int(value: Any) -> int | None:

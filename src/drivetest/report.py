@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TextIO
 
-from .smart import SmartInfo
+from .smart import HEALTH_COUNTERS, SmartInfo
 from .units import GIB
 
 
@@ -104,13 +104,13 @@ def diff_smart(before: SmartInfo, after: SmartInfo) -> list[SmartDelta]:
     :func:`health_regressions`.
     """
     deltas: list[SmartDelta] = []
-    for field in SmartInfo.HEALTH_COUNTERS:
-        b = getattr(before, field)
-        a = getattr(after, field)
+    for name, get in HEALTH_COUNTERS:
+        b = get(before)
+        a = get(after)
         if b is None or a is None:
             continue
         if a > b:
-            deltas.append(SmartDelta(field=field, before=b, after=a))
+            deltas.append(SmartDelta(field=name, before=b, after=a))
     return deltas
 
 

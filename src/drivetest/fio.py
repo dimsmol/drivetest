@@ -262,13 +262,16 @@ class FioRunner:
                 sink.flush()
                 self._echo(line)
 
-        # try/finally guarantees we never leave a write running against the
-        # device on an abnormal exit (Ctrl-C, an error in the monitor, a kill).
-        try:
-            with open(log_path, "w") as logf:
-                assert proc.stdout is not None
-                reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
-                reader.start()
+        with open(log_path, "w") as logf:
+            assert proc.stdout is not None
+            reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
+            reader.start()
+            # The inner finally runs before the log file closes, on every path
+            # (Ctrl-C, an error in the monitor, a kill): it stops fio - so we
+            # never leave a write running against the device - and only then
+            # joins the drain thread, so the thread can't write to a closed log
+            # (which would drop trailing output) and no line is lost.
+            try:
                 overheat = monitor_region(
                     is_alive=lambda: proc.poll() is None,
                     read_temp=self._read_temp,
@@ -277,12 +280,12 @@ class FioRunner:
                     kill=lambda: self._terminate(proc),
                     on_sample=self._on_sample,
                 )
-                reader.join()
                 returncode = proc.wait()
-            return classify_region(overheat, returncode)
-        finally:
-            if proc.poll() is None:
-                self._terminate(proc)
+            finally:
+                if proc.poll() is None:
+                    self._terminate(proc)
+                reader.join()
+        return classify_region(overheat, returncode)
 
     @staticmethod
     def _terminate(proc: subprocess.Popen[str]) -> None:

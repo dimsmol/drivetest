@@ -203,6 +203,29 @@ def test_run_region_terminates_fio_if_monitor_errors(tmp_path):
     assert proc.terminated
 
 
+def test_run_region_drains_all_output_before_closing_log_on_error(tmp_path):
+    # Even when the monitor errors, the drain thread is joined before the log
+    # file closes, so all streamed output lands and none is lost to a closed sink.
+    proc = _FakeProc()
+    proc.stdout = io.StringIO("line1\nline2\n")
+
+    def boom():
+        raise RuntimeError("temperature source failed")
+
+    runner = FioRunner(
+        read_temp=boom,
+        policy=POLICY,
+        sleep=lambda _s: None,
+        popen=lambda _argv: proc,  # type: ignore[arg-type,return-value]
+        echo=lambda _line: None,
+    )
+    log = tmp_path / "f.log"
+    with pytest.raises(RuntimeError):
+        runner.run_region("/dev/sdx", Region(1, 0, 1024), log)
+    assert proc.terminated
+    assert log.read_text() == "line1\nline2\n"
+
+
 # --- real fio integration (happy path) ------------------------------------
 
 @pytest.mark.fio
