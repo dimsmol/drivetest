@@ -14,17 +14,19 @@ from dataclasses import dataclass
 from .thermal import ThermalPolicy
 from .units import GIB
 
+MINUTE = 60  # seconds in a minute
+
 # Thermal thresholds sized for the USB *bridge's* drop point (~83 C observed on a
 # passive enclosure), not the drive's own ~90 C warning: the ceiling leaves
 # margin below the disconnect. See the ``thermal`` module for how they drive the
 # pacing loops.
 DEFAULT_THERMAL_POLICY = ThermalPolicy(
-    ceiling_c=78,           # abort a running region at/above this
-    cool_target_c=50,       # cool to this before each region
-    start_max_c=55,         # refuse to start a region above this
-    cool_max_wait_s=1200,   # never wait longer than this to cool
-    poll_interval_s=5.0,    # temperature sampling cadence during a write
-    cool_interval_s=20.0,   # sampling cadence while cooling
+    ceiling_c=75,  # abort a running region at/above this
+    cool_target_c=50,  # cool to this before each region
+    start_max_c=50,  # refuse to start a region above this
+    cool_max_wait_s=20 * MINUTE,  # never wait longer than this to cool
+    poll_interval_s=5.0,  # temperature sampling cadence during a write
+    cool_interval_s=20.0,  # sampling cadence while cooling
 )
 
 # --quick verifies just this leading span, for a fast sanity pass.
