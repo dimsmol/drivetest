@@ -166,7 +166,7 @@ class Logger:
         self._path = summary_path
         self._stream = stream
 
-    def log(self, message: str = "") -> None:
+    def log(self, message: str) -> None:
         if self._stream is not None:
             print(message, file=self._stream)
         else:
