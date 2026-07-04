@@ -4,11 +4,28 @@
 
 `drivetest` runs a health-and-integrity battery against a storage device: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder. It works for a drive in a USB enclosure (`/dev/sdX`) and for an NVMe drive in an M.2 slot (`/dev/nvmeXn1`).
 
-The tool is a small dependency-free Python package (`src/drivetest/`, run via the `./drivetest` wrapper). It shells out to `fio`, `smartctl`, `nvme`, `lsblk`, `wipefs` and `findmnt`, parsing their JSON output. Stdlib-only on purpose, so it runs from a minimal live USB. See [Development](#development) for the layout and how to test it.
+The tool is a small dependency-free Python package (`src/drivetest/`). It has no third-party Python dependencies - stdlib-only on purpose, so it runs from a minimal live USB - but it does shell out to a handful of external CLIs, parsing their JSON output. `flake.nix` is the authoritative list of those tools (and of the dev toolchain). See [Running](#running) for how to launch it and [Development](#development) for the layout and how to test it.
 
 For a worked end-to-end example - screening a new SSD in a passive USB enclosure, then validating it in an M.2 slot - see [doc/case_ssd_swap.md](doc/case_ssd_swap.md).
 
-> **Don't over-run the write test.** Each `--write` pass writes the whole drive once, spending a small but non-zero slice of its finite write endurance (TBW / flash program-erase cycles). A handful of runs is negligible; running it hundreds of times is a bad idea - you would burn through meaningful lifetime of the very drive you are trying to validate. Screen a drive a few times max, not habitually.
+> **Don't over-run the write test.** Each `--write` pass writes the whole drive once by default, spending a small but non-zero slice of its finite write endurance (TBW / flash program-erase cycles). A handful of runs is negligible; running it hundreds of times is a bad idea - you would burn through meaningful lifetime of the very drive you are trying to validate. Screen the whole drive a few times max, not habitually.
+
+## Running
+
+The project is a Nix flake, but nothing forces you to use Nix - both ways work:
+
+- **With Nix.** `flake.nix` bundles the external CLIs (fio, smartctl, nvme, util-linux) with the tool, so there is nothing else to install. Because a run needs root (SMART and raw device IO), install the package and call it under `sudo`:
+
+  ```bash
+  nix profile install github:dimsmol/drivetest   # or: nix profile install . from a checkout
+  sudo drivetest /dev/sdX
+  ```
+
+  For a throwaway run without installing, build it and point `sudo` at the result: `sudo "$(nix build --no-link --print-out-paths .#drivetest)/bin/drivetest" /dev/sdX`.
+
+- **Without Nix.** Run `./drivetest` straight from a checkout with any Python >= 3.11 - no install, no virtualenv. You just need the external CLIs on `PATH` (see `flake.nix` for the exact set); on a typical live USB or desktop most are already there. This is the mode the `./drivetest` wrapper exists for.
+
+The `sudo ./drivetest` form is used in the examples below; substitute the installed `sudo drivetest` if you went the Nix-install route.
 
 ## Usage
 
@@ -51,7 +68,7 @@ Pass = write/verify PASS, SMART diff clean, temperature stayed within limits.
 
 Resuming across sessions: each `--only` run reports `PASS (parts X of N ...)` for just the parts it ran - the drive is fully verified only once every part has passed across your runs.
 
-All the tunable defaults live in one place, the `config` module: `DEFAULT_QUICK_BYTES` and `DEFAULT_PARTS`, plus `DEFAULT_THERMAL_POLICY` (the `ceiling_c` / `cool_target_c` / `start_max_c` / `cool_max_wait_s` / ... thresholds). The CLI assembles a `RunConfig` from the parsed flags plus these defaults - the one place they're applied; `RunConfig` itself is a pure structure with no defaults, and the orchestrator just consumes it. So this is the only place to adjust for a different drive or enclosure.
+All the tunable defaults live in one place, the `config` module.
 
 ## Safety
 
@@ -83,7 +100,7 @@ Modules, each useful on its own:
 - `proc` - a thin, mockable subprocess seam (run a command, parse JSON).
 - `tools` - check that required external CLIs are present.
 - `units` - binary size constants (`KIB`/`MIB`/`GIB`).
-- `config` - the resolved `RunConfig` and all default values (sizing + thermal policy).
+- `config` - `RunConfig` type and all default values (sizing + thermal policy).
 - `devices` - enumerate block devices and model their identity (`lsblk`).
 - `safety` - the destructive-write guards (all pure decisions over gathered data).
 - `smart` - read SMART/health/temperature via `smartctl`/`nvme`.
@@ -95,6 +112,8 @@ Modules, each useful on its own:
 - `cli` / `orchestrator` - `cli` resolves flags into a `RunConfig`; `orchestrator` consumes it and runs the end-to-end battery.
 
 The import graph is acyclic and layered; `pyproject.toml` encodes the layering as an `import-linter` contract.
+
+`nix develop` drops you into a shell with everything the checks below need - Python, the external CLIs, and the lint/type/test toolchain (pytest, ruff, pyright, uv); `flake.nix` is the source of truth for that set. Or bring your own: any Python >= 3.11 plus those tools on `PATH`.
 
 Checks (all should be clean):
 

@@ -1,6 +1,10 @@
 # Test-run output (both the shell and Python tools write drive_test_<serial>_<stamp>/)
 drive_test_*/
 
+# Nix
+result
+result-*
+
 # Python
 __pycache__/
 *.py[cod]
