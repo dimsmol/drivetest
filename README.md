@@ -32,7 +32,7 @@ sudo ./drivetest --write /dev/sdX
 
 Useful flags:
 
-- `--quick` - write+verify only the first `quick_bytes` (`QUICK_BYTES` by default), for a fast sanity pass.
+- `--quick` - write+verify only the first `quick_bytes` (`DEFAULT_QUICK_BYTES` by default), for a fast sanity pass.
 - `--parts N` - split the write+verify into N regions with a cooldown before each (see [Thermal pacing](#thermal-pacing-passive-enclosures)).
 - `--only SPEC` - run just some of the N parts (e.g. `--only 1-4`), to break and resume.
 - `--force` - override the blank-disk guard (see [Safety](#safety)); use only when certain.
@@ -49,7 +49,7 @@ Pass = write/verify PASS, SMART diff clean, temperature stayed within limits.
 
 Resuming across sessions: each `--only` run reports `PASS (parts X of N ...)` for just the parts it ran - the drive is fully verified only once every part has passed across your runs.
 
-All the tunable defaults live in one place, the `config` module: `QUICK_BYTES` and `DEFAULT_PARTS`, plus `DEFAULT_THERMAL_POLICY` (the `ceiling_c` / `cool_target_c` / `start_max_c` / `cool_max_wait_s` / ... thresholds). They are the field defaults of `RunConfig`; the CLI resolves a `RunConfig` from them and the orchestrator consumes it, so this is the only place to adjust for a different drive or enclosure.
+All the tunable defaults live in one place, the `config` module: `DEFAULT_QUICK_BYTES` and `DEFAULT_PARTS`, plus `DEFAULT_THERMAL_POLICY` (the `ceiling_c` / `cool_target_c` / `start_max_c` / `cool_max_wait_s` / ... thresholds). The CLI assembles a `RunConfig` from the parsed flags plus these defaults - the one place they're applied; `RunConfig` itself is a pure structure with no defaults, and the orchestrator just consumes it. So this is the only place to adjust for a different drive or enclosure.
 
 ## Safety
 

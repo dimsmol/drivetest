@@ -13,7 +13,7 @@ import argparse
 import os
 import sys
 
-from .config import DEFAULT_PARTS, QUICK_BYTES, RunConfig
+from .config import DEFAULT_PARTS, DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY, RunConfig
 from .orchestrator import RunContext, run
 from .planning import parse_only_spec
 from .units import GIB
@@ -24,7 +24,7 @@ DESCRIPTION = "Health, integrity and performance test for an SSD/NVMe drive."
 
 # Human label for the --quick span, derived from the constant so help text and
 # the value stay in step.
-QUICK_BYTES_LABEL = f"{QUICK_BYTES // GIB}G"
+QUICK_BYTES_LABEL = f"{DEFAULT_QUICK_BYTES // GIB}G"
 
 EPILOG = f"""\
 examples:
@@ -107,17 +107,19 @@ def parse_args(argv: list[str]) -> RunConfig:
     if ns.force and not ns.write:
         parser.error("--force only applies together with --write")
 
-    # Start from the defaults baked into RunConfig and override with the parsed
-    # flags; unset knobs (quick_bytes, thermal policy) keep their defaults.
+    # The one place a run config is assembled: parsed flags plus the defaults for
+    # the knobs with no flag (quick_bytes, thermal policy).
     return RunConfig(
         device=ns.device,
         write=ns.write,
         quick=ns.quick,
         force=ns.force,
-        parts=ns.parts,
         only=ns.only,
         assume_yes=ns.assume_yes,
         log_dir=ns.log_dir,
+        parts=ns.parts,
+        quick_bytes=DEFAULT_QUICK_BYTES,
+        policy=DEFAULT_THERMAL_POLICY,
     )
 
 

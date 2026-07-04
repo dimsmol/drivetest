@@ -10,7 +10,12 @@ import json
 
 import pytest
 
-from drivetest.config import RunConfig
+from drivetest.config import (
+    DEFAULT_PARTS,
+    DEFAULT_QUICK_BYTES,
+    DEFAULT_THERMAL_POLICY,
+    RunConfig,
+)
 from drivetest.fio import RegionResult
 from drivetest.orchestrator import (
     _REGION_TO_VERIFY,
@@ -37,6 +42,22 @@ def _no_missing_tools(monkeypatch):  # pyright: ignore[reportUnusedFunction]  # 
     monkeypatch.setattr("drivetest.orchestrator.missing_tools", lambda required: [])
 
 
+def _config(device, *, write=False, assume_yes=False) -> RunConfig:
+    """A RunConfig for these tests, defaulting the knobs a run doesn't vary."""
+    return RunConfig(
+        device=device,
+        write=write,
+        quick=False,
+        force=False,
+        only=None,
+        assume_yes=assume_yes,
+        log_dir=None,
+        parts=DEFAULT_PARTS,
+        quick_bytes=DEFAULT_QUICK_BYTES,
+        policy=DEFAULT_THERMAL_POLICY,
+    )
+
+
 def _ctx(runner, tmp_path, **kw) -> RunContext:
     return RunContext(
         runner=runner,
@@ -57,7 +78,7 @@ def test_readonly_happy_path(tmp_path):
     runner.add("fio", contains=["seqread"], stdout=load_text("fio_seqread.json"))
     runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
 
-    code = run(RunConfig(device="/dev/sda", write=False), _ctx(runner, tmp_path))
+    code = run(_config("/dev/sda"), _ctx(runner, tmp_path))
     assert code == EXIT_OK
 
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
@@ -81,7 +102,7 @@ def test_write_refused_on_system_disk(tmp_path):
 
     confirmed = []
     ctx = _ctx(runner, tmp_path, confirm=lambda p: confirmed.append(p) or "")
-    code = run(RunConfig(device="/dev/nvme0n1", write=True, assume_yes=False), ctx)
+    code = run(_config("/dev/nvme0n1", write=True, assume_yes=False), ctx)
 
     assert code == EXIT_REFUSED
     summary = (tmp_path / "drive_test_S3ZHNF0KC28756_TEST" / "summary.log").read_text()
@@ -94,7 +115,7 @@ def test_write_refused_on_system_disk(tmp_path):
 def test_device_not_found(tmp_path):
     runner = FakeRunner()
     runner.add("lsblk", contains=["-Jb"], stdout='{"blockdevices": []}')
-    code = run(RunConfig(device="/dev/nope", write=False), _ctx(runner, tmp_path))
+    code = run(_config("/dev/nope"), _ctx(runner, tmp_path))
     assert code == EXIT_REFUSED
 
 
@@ -131,5 +152,5 @@ def test_readonly_flags_worsened_smart(tmp_path):
     runner.add("fio", contains=["seqread"], stdout=load_text("fio_seqread.json"))
     runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
 
-    code = run(RunConfig(device="/dev/sda", write=False), _ctx(runner, tmp_path))
+    code = run(_config("/dev/sda"), _ctx(runner, tmp_path))
     assert code == EXIT_ATTENTION

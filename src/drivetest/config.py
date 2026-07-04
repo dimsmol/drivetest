@@ -28,7 +28,7 @@ DEFAULT_THERMAL_POLICY = ThermalPolicy(
 )
 
 # --quick verifies just this leading span, for a fast sanity pass.
-QUICK_BYTES = 50 * GIB
+DEFAULT_QUICK_BYTES = 50 * GIB
 
 # Regions a full write+verify is split into by default. 1 is a single continuous
 # pass; raise it (e.g. 8) for a passive enclosure that would otherwise overheat,
@@ -40,18 +40,18 @@ DEFAULT_PARTS = 1
 class RunConfig:
     """A fully-resolved run configuration: what to do plus how to pace it.
 
-    Produced at the boundary by overriding the defaults below, and consumed by
-    the orchestrator, which never reads the raw defaults itself. ``ThermalPolicy``
-    is immutable, so sharing one default instance as a field default is safe.
+    A pure structure with no built-in defaults - every field is set explicitly at
+    construction. The CLI is the one place that resolves it, applying the defaults
+    above; the orchestrator only ever consumes a finished config.
     """
 
     device: str
-    write: bool = False
-    quick: bool = False
-    force: bool = False
-    only: str | None = None
-    assume_yes: bool = False
-    log_dir: str | None = None
-    parts: int = DEFAULT_PARTS
-    quick_bytes: int = QUICK_BYTES
-    policy: ThermalPolicy = DEFAULT_THERMAL_POLICY
+    write: bool
+    quick: bool
+    force: bool
+    only: str | None
+    assume_yes: bool
+    log_dir: str | None
+    parts: int
+    quick_bytes: int
+    policy: ThermalPolicy
