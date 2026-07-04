@@ -7,12 +7,12 @@ import itertools
 import pytest
 
 from drivetest.planning import (
-    MIB,
     Region,
     parse_only_spec,
     plan_regions,
     quick_region,
 )
+from drivetest.units import GIB, MIB
 
 
 def test_regions_tile_the_device_exactly():
@@ -61,10 +61,10 @@ def test_plan_regions_rejects_bad_input():
 
 
 def test_quick_region_is_a_leading_span():
-    region = quick_region(50 * 1024**3)
+    region = quick_region(50 * GIB)
     assert region.index == 1
     assert region.offset == 0
-    assert region.size == 50 * 1024**3
+    assert region.size == 50 * GIB
 
 
 @pytest.mark.parametrize(

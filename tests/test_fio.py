@@ -20,6 +20,7 @@ from drivetest.fio import (
     parse_read_json,
 )
 from drivetest.planning import Region
+from drivetest.units import KIB, MIB
 
 from .conftest import collect_sleep, load_json
 
@@ -68,7 +69,7 @@ def test_parse_read_json_falls_back_to_kib_bw():
     # older fio without bw_bytes
     obj = {"jobs": [{"read": {"bw": 1000, "iops": 10}}]}
     stats = parse_read_json(obj, "seqread")
-    assert stats.bw_bytes == 1000 * 1024
+    assert stats.bw_bytes == 1000 * KIB
 
 
 def test_parse_read_json_no_jobs():
@@ -88,7 +89,8 @@ def test_classify_region():
 # --- temperature monitor --------------------------------------------------
 
 def test_monitor_kills_on_ceiling_breach():
-    temps = iter([50, 60, 78])   # third sample hits the ceiling
+    # third sample reaches the ceiling and must trigger a kill
+    temps = iter([POLICY.ceiling_c - 20, POLICY.ceiling_c - 10, POLICY.ceiling_c])
     killed = []
     sleep, _ = collect_sleep()
     overheat = monitor_region(
@@ -185,7 +187,7 @@ def test_run_region_terminates_fio_if_monitor_errors(tmp_path):
 @pytest.mark.skipif(shutil.which("fio") is None, reason="fio not installed")
 def test_run_region_writeverify_on_scratch_file(tmp_path):
     scratch = tmp_path / "scratch.bin"
-    scratch.write_bytes(b"\0" * (8 * 1024 * 1024))  # 8 MiB
+    scratch.write_bytes(b"\0" * (8 * MIB))
     log = tmp_path / "fio.log"
     sleep, _ = collect_sleep()
     runner = FioRunner(
@@ -194,6 +196,6 @@ def test_run_region_writeverify_on_scratch_file(tmp_path):
         sleep=sleep,
         echo=lambda line: None,
     )
-    result = runner.run_region(str(scratch), Region(1, 0, 8 * 1024 * 1024), log)
+    result = runner.run_region(str(scratch), Region(1, 0, 8 * MIB), log)
     assert result is RegionResult.PASS
     assert log.exists() and log.stat().st_size > 0

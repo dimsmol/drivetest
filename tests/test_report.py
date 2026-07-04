@@ -14,6 +14,7 @@ from drivetest.report import (
     format_gib,
 )
 from drivetest.smart import SmartInfo, parse_smart_json
+from drivetest.units import GIB
 
 from .conftest import load_json
 
@@ -86,7 +87,7 @@ def test_verify_outcome_describe():
 
 
 def test_format_gib():
-    assert format_gib(50 * 1024**3) == "50GiB"
+    assert format_gib(50 * GIB) == "50GiB"
     assert format_gib(0) == "0GiB"
 
 

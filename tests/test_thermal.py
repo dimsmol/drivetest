@@ -16,19 +16,25 @@ from .conftest import collect_sleep
 
 POLICY = DEFAULT_THERMAL_POLICY
 
+# Sample temps relative to the policy so these scenarios track threshold changes:
+# HOT is above both gates (needs cooling, cannot start), COOL is below both.
+HOT = max(POLICY.cool_target_c, POLICY.start_max_c) + 20
+COOL = min(POLICY.cool_target_c, POLICY.start_max_c) - 5
+
 
 def test_pure_thresholds():
-    assert exceeds_ceiling(78, POLICY)
-    assert exceeds_ceiling(90, POLICY)
-    assert not exceeds_ceiling(77, POLICY)
+    # Derived from POLICY so these track the configured thresholds, not literals.
+    assert exceeds_ceiling(POLICY.ceiling_c, POLICY)       # at the ceiling trips
+    assert exceeds_ceiling(POLICY.ceiling_c + 5, POLICY)
+    assert not exceeds_ceiling(POLICY.ceiling_c - 1, POLICY)
     assert not exceeds_ceiling(None, POLICY)  # unknown never trips the ceiling
 
-    assert needs_cooldown(51, POLICY)
-    assert not needs_cooldown(50, POLICY)
+    assert needs_cooldown(POLICY.cool_target_c + 1, POLICY)  # above target -> cool
+    assert not needs_cooldown(POLICY.cool_target_c, POLICY)
     assert not needs_cooldown(None, POLICY)
 
-    assert can_start(55, POLICY)
-    assert not can_start(56, POLICY)
+    assert can_start(POLICY.start_max_c, POLICY)             # at start-max is ok
+    assert not can_start(POLICY.start_max_c + 1, POLICY)
     assert can_start(None, POLICY)  # unknown temperature -> allowed to start
 
 
@@ -46,11 +52,11 @@ def _controller(temps, policy=POLICY):
 
 
 def test_cooldown_stops_when_target_reached():
-    ctrl, slept = _controller([70, 60, 48])
+    ctrl, slept = _controller([HOT, HOT, COOL])
     outcome = ctrl.cooldown()
     assert outcome.reached_target
-    assert outcome.last_temp == 48
-    # slept twice (after 70 and after 60), not after reaching 48
+    assert outcome.last_temp == COOL
+    # slept after each hot sample, not after reaching COOL
     assert len(slept) == 2
 
 
@@ -65,25 +71,25 @@ def test_cooldown_pauses_once_when_unreadable():
 def test_cooldown_gives_up_after_max_wait():
     # never cools; capped by cool_max_wait_s / cool_interval_s iterations
     policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=60, cool_interval_s=20)
-    ctrl, _slept = _controller([80] * 100, policy)
+    ctrl, _slept = _controller([HOT] * 100, policy)
     outcome = ctrl.cooldown()
     assert not outcome.reached_target
     assert outcome.waited_s == 60  # 3 intervals of 20s
 
 
 def test_prestart_ok_when_already_cool():
-    ctrl, _ = _controller([40])
+    ctrl, _ = _controller([COOL])
     assert ctrl.prestart_ok()
 
 
 def test_prestart_cools_then_proceeds():
-    # starts hot (70), cools to 45, then a final sample at 45 -> can start
-    ctrl, _ = _controller([70, 60, 45, 45])
+    # starts hot, cools to COOL, then a final COOL sample -> can start
+    ctrl, _ = _controller([HOT, HOT, COOL, COOL])
     assert ctrl.prestart_ok()
 
 
 def test_prestart_refuses_when_still_hot_after_cooldown():
     # hot start, cooldown caps out still hot, final sample above start_max
     policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=20, cool_interval_s=20)
-    ctrl, _ = _controller([70, 70, 70], policy)
+    ctrl, _ = _controller([HOT, HOT, HOT], policy)
     assert not ctrl.prestart_ok()

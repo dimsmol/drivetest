@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from drivetest.smart import (
+    KELVIN_OFFSET,
+    MAX_PLAUSIBLE_TEMP_C,
     _kelvin_or_celsius,
     detect_access_mode,
     parse_smart_json,
@@ -11,6 +13,10 @@ from drivetest.smart import (
 )
 
 from .conftest import FakeRunner, load_json, load_text
+
+# A plausible Celsius drive temperature; the Kelvin-conversion tests build their
+# input from it with KELVIN_OFFSET, so the round-trip is obvious at a glance.
+SAMPLE_TEMP_C = 40
 
 
 def test_parse_nvme_report():
@@ -76,18 +82,20 @@ def test_read_smart_parses_valid_json(fake_runner: FakeRunner):
 
 
 def test_read_temperature_nvme_json_kelvin(fake_runner: FakeRunner):
-    # nvme-cli reports Kelvin; 307 K -> 34 C
-    fake_runner.add("nvme", contains=["smart-log"], stdout='{"temperature": 307}')
-    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
+    # nvme-cli reports Kelvin; KELVIN_OFFSET converts it back to Celsius.
+    kelvin = SAMPLE_TEMP_C + KELVIN_OFFSET
+    fake_runner.add("nvme", contains=["smart-log"], stdout=f'{{"temperature": {kelvin}}}')
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == SAMPLE_TEMP_C
 
 
 def test_read_temperature_rejects_out_of_range(fake_runner: FakeRunner):
-    fake_runner.add("nvme", contains=["smart-log"], stdout='{"temperature": 999}')
-    # 999 K -> 726 C, implausible -> None
+    # A Kelvin reading that converts to above the plausibility ceiling -> None.
+    too_hot_k = MAX_PLAUSIBLE_TEMP_C + KELVIN_OFFSET + 50
+    fake_runner.add("nvme", contains=["smart-log"], stdout=f'{{"temperature": {too_hot_k}}}')
     assert read_temperature(fake_runner, "/dev/nvme0n1", []) is None
 
 
 def test_kelvin_or_celsius():
-    assert _kelvin_or_celsius(307) == 34   # kelvin
-    assert _kelvin_or_celsius(34) == 34    # already celsius
+    assert _kelvin_or_celsius(SAMPLE_TEMP_C + KELVIN_OFFSET) == SAMPLE_TEMP_C  # kelvin in
+    assert _kelvin_or_celsius(SAMPLE_TEMP_C) == SAMPLE_TEMP_C                   # already celsius
     assert _kelvin_or_celsius(None) is None
