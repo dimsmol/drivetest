@@ -34,6 +34,13 @@ KELVIN_OFFSET = 273
 # No drive runs this hot in Celsius, so a value above it must be Kelvin.
 CELSIUS_KELVIN_THRESHOLD = 200
 
+# ATA SMART attribute ids (the smartctl ``id`` field) for the health counters we
+# read; paired with their canonical names as an id-or-name fallback.
+ATA_ATTR_REALLOCATED_SECTORS = 5
+ATA_ATTR_PENDING_SECTORS = 197
+ATA_ATTR_OFFLINE_UNCORRECTABLE = 198
+ATA_ATTR_UDMA_CRC_ERRORS = 199
+
 
 @dataclass(frozen=True)
 class SmartInfo:
@@ -90,6 +97,11 @@ def _int(value: Any) -> int | None:
         return None
 
 
+def _bool_or_none(value: Any) -> bool | None:
+    """Only a real JSON boolean is a verdict; anything else is 'unknown'."""
+    return value if isinstance(value, bool) else None
+
+
 def _ata_attr(obj: dict[str, Any], attr_id: int, name: str) -> int | None:
     """Pull an ATA SMART attribute's raw value by id or (fallback) name."""
     attrs: dict[str, Any] = obj.get("ata_smart_attributes") or {}
@@ -123,7 +135,7 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
         model=obj.get("model_name"),
         serial=obj.get("serial_number"),
         firmware=obj.get("firmware_version"),
-        health_passed=status.get("passed"),
+        health_passed=_bool_or_none(status.get("passed")),
         temperature_c=temp,
         media_errors=_int(nvme.get("media_errors")),
         available_spare=_int(nvme.get("available_spare")),
@@ -131,10 +143,12 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
         unsafe_shutdowns=_int(nvme.get("unsafe_shutdowns")),
         critical_warning=_int(nvme.get("critical_warning")),
         power_on_hours=_int(power_on.get("hours")),
-        reallocated_sectors=_ata_attr(obj, 5, "Reallocated_Sector_Ct"),
-        pending_sectors=_ata_attr(obj, 197, "Current_Pending_Sector"),
-        uncorrectable_errors=_ata_attr(obj, 198, "Offline_Uncorrectable"),
-        crc_errors=_ata_attr(obj, 199, "UDMA_CRC_Error_Count"),
+        reallocated_sectors=_ata_attr(obj, ATA_ATTR_REALLOCATED_SECTORS, "Reallocated_Sector_Ct"),
+        pending_sectors=_ata_attr(obj, ATA_ATTR_PENDING_SECTORS, "Current_Pending_Sector"),
+        uncorrectable_errors=_ata_attr(
+            obj, ATA_ATTR_OFFLINE_UNCORRECTABLE, "Offline_Uncorrectable"
+        ),
+        crc_errors=_ata_attr(obj, ATA_ATTR_UDMA_CRC_ERRORS, "UDMA_CRC_Error_Count"),
         raw=obj,
     )
 
@@ -176,7 +190,8 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     """Best-effort current temperature in Celsius.
 
     Prefers ``nvme smart-log`` (JSON) for an NVMe node, else ``smartctl``. A
-    plausibility window (15-110 C) rejects garbage from a flaky bridge.
+    plausibility window (MIN_PLAUSIBLE_TEMP_C..MAX_PLAUSIBLE_TEMP_C) rejects
+    garbage from a flaky bridge.
     """
     temp: int | None = None
     if "nvme" in dev_path:

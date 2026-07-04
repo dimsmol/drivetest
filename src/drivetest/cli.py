@@ -14,7 +14,7 @@ import os
 import sys
 
 from .config import DEFAULT_PARTS, DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY, RunConfig
-from .orchestrator import RunContext, run
+from .orchestrator import EXIT_REFUSED, RunContext, run
 from .planning import parse_only_spec
 from .units import GIB
 
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if os.geteuid() != 0:
         print("error: run as root (sudo)", file=sys.stderr)
-        return 1
+        return EXIT_REFUSED
 
     return run(options, RunContext())
 

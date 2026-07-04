@@ -19,35 +19,60 @@ from .units import GIB
 
 
 class SmartVerdict(Enum):
+    """Semantic verdict of the before/after SMART comparison.
+
+    Member values are stable identifiers; :func:`describe_verdict` renders the
+    display text, kept out of the data so wording can change independently.
+    """
+
     CLEAN = "clean"
-    CHANGED = "CHANGED - health worsened"
-    UNKNOWN = "unknown (post-run SMART read failed - device may have dropped)"
+    CHANGED = "changed"
+    UNKNOWN = "unknown"
+
+
+_SMART_VERDICT_TEXT = {
+    SmartVerdict.CLEAN: "clean",
+    SmartVerdict.CHANGED: "CHANGED - health worsened",
+    SmartVerdict.UNKNOWN: "unknown (post-run SMART read failed - device may have dropped)",
+}
+
+
+def describe_verdict(verdict: SmartVerdict) -> str:
+    return _SMART_VERDICT_TEXT[verdict]
 
 
 class VerifyStatus(Enum):
     """Outcome of the write+verify phase.
 
     ``SKIPPED`` is a read-only run; the rest correspond to fio's ``RegionResult``
-    (the orchestrator maps between them explicitly). Values are display text.
+    (the orchestrator maps between them explicitly). Member values are semantic
+    identifiers; display text is rendered by :func:`VerifyOutcome.describe`.
     """
 
     SKIPPED = "skipped"
-    PASS = "PASS"
-    FAIL = "FAIL"
-    OVERHEAT = "OVERHEAT"
+    PASS = "pass"
+    FAIL = "fail"
+    OVERHEAT = "overheat"
+
+
+_VERIFY_STATUS_TEXT = {
+    VerifyStatus.SKIPPED: "skipped",
+    VerifyStatus.PASS: "PASS",
+    VerifyStatus.FAIL: "FAIL",
+    VerifyStatus.OVERHEAT: "OVERHEAT",
+}
 
 
 @dataclass(frozen=True)
 class VerifyOutcome:
     """The write+verify result as data, not a formatted string.
 
-    ``partial`` marks a ``--only`` subset pass (the whole drive is verified only
-    once every part has passed across runs); ``detail`` carries the human note
-    for it, kept out of the control-flow state.
+    ``detail`` is present only for a ``--only`` subset pass (the whole drive is
+    verified only once every part has passed across runs); its presence *is* the
+    "partial" flag, so the two can't disagree.
     """
 
     status: VerifyStatus
-    partial: bool = False
     detail: str | None = None
 
     @property
@@ -55,9 +80,10 @@ class VerifyOutcome:
         return self.status in (VerifyStatus.FAIL, VerifyStatus.OVERHEAT)
 
     def describe(self) -> str:
-        if self.partial and self.detail:
-            return f"{self.status.value} ({self.detail} - not the whole drive)"
-        return self.status.value
+        text = _VERIFY_STATUS_TEXT[self.status]
+        if self.detail:
+            return f"{text} ({self.detail} - not the whole drive)"
+        return text
 
 
 @dataclass(frozen=True)

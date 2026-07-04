@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from drivetest.devices import (
     all_serials,
+    canonical_path,
     find_device,
     list_devices,
     parse_lsblk,
@@ -34,11 +39,14 @@ def test_parse_nested_children_and_mountpoints():
 
 
 def test_identity_fingerprint_is_stable_and_distinct():
-    [usb] = parse_lsblk(load_text("lsblk_usb_sda.json"))
+    # Parsed twice into separate objects: identity must be equal across parses
+    # (that stability is the whole point of the fingerprint).
+    [usb_a] = parse_lsblk(load_text("lsblk_usb_sda.json"))
+    [usb_b] = parse_lsblk(load_text("lsblk_usb_sda.json"))
     [nvme] = parse_lsblk(load_text("lsblk_nvme_system.json"))
-    assert usb.identity == usb.identity
-    assert usb.identity != nvme.identity
-    assert usb.serial is not None and usb.serial in usb.identity
+    assert usb_a.identity == usb_b.identity
+    assert usb_a.identity != nvme.identity
+    assert usb_a.identity == (usb_a.serial, usb_a.wwn, usb_a.size, usb_a.model)
 
 
 def test_blank_fields_normalized_to_none():
@@ -68,3 +76,67 @@ def test_all_serials_skips_empty():
     serials = all_serials(devices)
     assert serials.count("DUP-SERIAL") == 2
     assert "S3ZHNF0KC28756" in serials
+
+
+# --- malformed / edge lsblk output ----------------------------------------
+
+def test_parse_lsblk_rejects_non_object():
+    with pytest.raises(ValueError):
+        parse_lsblk("[]")
+    with pytest.raises(ValueError):
+        parse_lsblk("5")
+
+
+def test_parse_lsblk_rejects_non_json():
+    with pytest.raises(json.JSONDecodeError):
+        parse_lsblk("not json at all")
+
+
+def test_parse_lsblk_empty_when_no_blockdevices():
+    assert parse_lsblk({}) == []
+    assert parse_lsblk({"blockdevices": []}) == []
+
+
+def test_find_device_raises_when_absent(fake_runner: FakeRunner):
+    fake_runner.add("lsblk", stdout='{"blockdevices": []}')
+    with pytest.raises(LookupError):
+        find_device(fake_runner, "/dev/nope")
+
+
+def test_size_parsed_from_string_and_missing():
+    # lsblk versions vary: SIZE may arrive as a JSON string; a missing size is
+    # kept as None (not faked to 0) so callers can fail loudly where it matters.
+    data = {
+        "blockdevices": [
+            {"name": "sda", "path": "/dev/sda", "type": "disk", "size": "12345"},
+            {"name": "sdb", "path": "/dev/sdb", "type": "disk", "size": None},
+        ]
+    }
+    sda, sdb = parse_lsblk(data)
+    assert sda.size == 12345
+    assert sda.size_bytes == 12345
+    assert sdb.size is None
+
+
+def test_size_bytes_raises_when_absent():
+    [dev] = parse_lsblk({"blockdevices": [{"name": "sdz", "path": "/dev/sdz", "type": "disk"}]})
+    with pytest.raises(ValueError):
+        _ = dev.size_bytes
+
+
+def test_find_device_rejects_target_without_size(fake_runner: FakeRunner):
+    # The target we're about to write to/benchmark must have a real size.
+    fake_runner.add(
+        "lsblk",
+        stdout='{"blockdevices": [{"name": "sda", "path": "/dev/sda", "type": "disk"}]}',
+    )
+    with pytest.raises(LookupError):
+        find_device(fake_runner, "/dev/sda")
+
+
+def test_canonical_path_resolves_symlink(tmp_path):
+    real = tmp_path / "sda"
+    real.write_text("")
+    link = tmp_path / "by-id-link"
+    link.symlink_to(real)
+    assert canonical_path(str(link)) == str(real)

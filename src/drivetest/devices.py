@@ -19,6 +19,9 @@ from .proc import Runner, run_json
 # The columns we ask lsblk for. ``-b`` makes SIZE an integer byte count.
 LSBLK_COLUMNS = "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,TRAN,MOUNTPOINTS"
 
+# A device's identity fingerprint: (serial, WWN, size, model). Compared by value.
+DeviceIdentity = tuple[str | None, str | None, int | None, str | None]
+
 
 @dataclass(frozen=True)
 class Device:
@@ -33,7 +36,7 @@ class Device:
     path: str
     name: str
     type: str
-    size: int
+    size: int | None
     model: str | None = None
     serial: str | None = None
     wwn: str | None = None
@@ -46,15 +49,29 @@ class Device:
         return self.type == "disk"
 
     @property
-    def identity(self) -> str:
-        """A stable fingerprint (serial, WWN, size, model) used to detect the
-        node being reassigned to a different physical device (e.g. a USB
-        replug) between confirmation and write.
+    def size_bytes(self) -> int:
+        """The size in bytes, raising if lsblk reported none.
+
+        A real whole disk always has a size, so its absence is an unexpected
+        lsblk state we refuse to paper over with a fake ``0`` (which would feed a
+        bogus value into the identity fingerprint and the region math).
         """
-        return "|".join(
-            "" if v is None else str(v)
-            for v in (self.serial, self.wwn, self.size, self.model)
-        )
+        if self.size is None:
+            raise ValueError(f"{self.path} has no size reported by lsblk")
+        return self.size
+
+    @property
+    def identity(self) -> DeviceIdentity:
+        """A structural fingerprint (serial, WWN, size, model) used to detect the
+        node being reassigned to a different physical device (e.g. a USB replug)
+        between confirmation and write.
+
+        A tuple compared by value, so ``None`` fields stay distinct from empty
+        strings and no delimiter can collide. Not guaranteed unique when both
+        serial and WWN are absent, so the write path additionally requires a
+        unique serial (see :func:`drivetest.safety.check_serial_unique`).
+        """
+        return (self.serial, self.wwn, self.size, self.model)
 
     def walk(self) -> list[Device]:
         """This device followed by every descendant, depth-first."""
@@ -90,7 +107,7 @@ def _device_from_node(node: dict[str, Any]) -> Device:
         path=str(node.get("path") or f"/dev/{node.get('name')}"),
         name=str(node.get("name") or ""),
         type=str(node.get("type") or ""),
-        size=int(size) if size is not None else 0,
+        size=int(size) if size is not None else None,
         model=_clean(node.get("model")),
         serial=_clean(node.get("serial")),
         wwn=_clean(node.get("wwn")),
@@ -136,9 +153,12 @@ def find_device(runner: Runner, path: str) -> Device:
     devices = list_devices(runner, path=real)
     if not devices:
         raise LookupError(f"lsblk returned no device for {real}")
-    return devices[0]
+    dev = devices[0]
+    if dev.size is None:
+        raise LookupError(f"lsblk reported no size for {real} (unexpected for a whole device)")
+    return dev
 
 
 def all_serials(devices: Sequence[Device]) -> list[str]:
-    """Every non-empty serial among the given top-level disks."""
+    """Every non-empty serial among the given devices."""
     return [d.serial for d in devices if d.serial]

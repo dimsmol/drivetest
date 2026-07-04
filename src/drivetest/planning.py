@@ -76,24 +76,32 @@ def parse_only_spec(spec: str, parts: int) -> set[int]:
         if not (1 <= a <= b <= parts):
             raise ValueError(f"--only '{item}' out of range 1-{parts}")
         selected.update(range(a, b + 1))
-    if not selected:
-        raise ValueError(f"no parts selected by spec '{spec}'")
+    # Every non-empty item either raised or added at least one part, and there is
+    # always at least one item, so ``selected`` is non-empty here.
     return selected
+
+
+def _is_index(text: str) -> bool:
+    """A 1-based part number: ASCII digits only (``str.isdigit`` also accepts
+    superscripts and full-width digits, which ``int`` would mishandle).
+    """
+    return text.isascii() and text.isdigit()
 
 
 def _parse_item(item: str, parts: int) -> tuple[int, int]:
     """Parse one spec item into an inclusive (a, b) range."""
     if item.endswith("-"):
-        head = item[:-1]
-        if not head.isdigit():
+        head = item[:-1].strip()
+        if not _is_index(head):
             raise ValueError(f"bad --only item '{item}' (use N, A-B, or A-)")
         return int(head), parts
     if "-" in item:
         head, _, tail = item.partition("-")
-        if not (head.isdigit() and tail.isdigit()):
+        head, tail = head.strip(), tail.strip()
+        if not (_is_index(head) and _is_index(tail)):
             raise ValueError(f"bad --only item '{item}' (use N, A-B, or A-)")
         return int(head), int(tail)
-    if not item.isdigit():
+    if not _is_index(item):
         raise ValueError(f"bad --only item '{item}' (use N, A-B, or A-)")
     value = int(item)
     return value, value

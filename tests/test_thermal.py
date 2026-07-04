@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.thermal import (
     ThermalController,
@@ -15,6 +17,22 @@ from drivetest.thermal import (
 from .conftest import collect_sleep
 
 POLICY = DEFAULT_THERMAL_POLICY
+
+
+def test_default_policy_satisfies_ordering_invariant():
+    assert POLICY.cool_target_c <= POLICY.start_max_c < POLICY.ceiling_c
+
+
+def test_thermal_policy_rejects_bad_ordering():
+    with pytest.raises(ValueError):
+        replace(POLICY, ceiling_c=POLICY.start_max_c)  # ceiling not above start_max
+    with pytest.raises(ValueError):
+        replace(POLICY, start_max_c=POLICY.cool_target_c - 1)  # start below cool target
+
+
+def test_thermal_policy_rejects_nonpositive_interval():
+    with pytest.raises(ValueError):
+        replace(POLICY, cool_interval_s=0)
 
 # Sample temps relative to the policy so these scenarios track threshold changes:
 # HOT is above both gates (needs cooling, cannot start), COOL is below both.

@@ -37,6 +37,23 @@ class ThermalPolicy:
     poll_interval_s: float
     cool_interval_s: float
 
+    def __post_init__(self) -> None:
+        # The pacing loops rely on this ordering: cool below the start gate, and
+        # start below the abort ceiling. A misconfigured policy (e.g. start_max
+        # under cool_target) would otherwise wedge a region that can never start.
+        if not (self.cool_target_c <= self.start_max_c < self.ceiling_c):
+            raise ValueError(
+                "thermal thresholds must satisfy "
+                "cool_target_c <= start_max_c < ceiling_c, got "
+                f"{self.cool_target_c}/{self.start_max_c}/{self.ceiling_c}"
+            )
+        # Positive intervals keep the cooldown loop making progress (a zero/negative
+        # cool_interval_s would never advance the wait and could spin forever).
+        if self.poll_interval_s <= 0 or self.cool_interval_s <= 0:
+            raise ValueError("thermal poll/cool intervals must be positive")
+        if self.cool_max_wait_s < 0:
+            raise ValueError("cool_max_wait_s must be non-negative")
+
 
 def exceeds_ceiling(temp: Temp, policy: ThermalPolicy) -> bool:
     """True only when a real reading is at/above the ceiling."""
@@ -66,7 +83,7 @@ def _ignore_log(_message: str) -> None:
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class CooldownOutcome:
     reached_target: bool
     unreadable: bool
@@ -122,14 +139,20 @@ class ThermalController:
             if temp is None:
                 self._log("cooldown: temperature unreadable - pausing one interval")
                 self._sleep(pause)
-                return CooldownOutcome(False, True, waited + pause, None)
+                return CooldownOutcome(
+                    reached_target=False, unreadable=True, waited_s=waited + pause, last_temp=None
+                )
             if temp <= policy.cool_target_c:
                 self._log(f"cooldown: reached {temp} C after {waited:.0f}s")
-                return CooldownOutcome(True, False, waited, temp)
+                return CooldownOutcome(
+                    reached_target=True, unreadable=False, waited_s=waited, last_temp=temp
+                )
             self._sleep(pause)
             waited += pause
         self._log(f"cooldown: still {temp} C after {waited:.0f}s - continuing")
-        return CooldownOutcome(False, False, waited, temp)
+        return CooldownOutcome(
+            reached_target=False, unreadable=False, waited_s=waited, last_temp=temp
+        )
 
     def prestart_ok(self) -> bool:
         """Gate before a region: if hot, cool first; then refuse if still too

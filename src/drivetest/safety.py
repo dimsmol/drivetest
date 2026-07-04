@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .devices import Device
+from .devices import Device, DeviceIdentity
 
 
 @dataclass(frozen=True)
@@ -164,14 +164,14 @@ def check_serial_unique(dev: Device, all_serials: Sequence[str]) -> Check:
     return Check("unique-serial", True, f"serial '{dev.serial}' is unique")
 
 
-def check_identity_stable(expected: str, current: str) -> Check:
+def check_identity_stable(expected: DeviceIdentity, current: DeviceIdentity) -> Check:
     """Confirm the node still names the same physical device it did earlier."""
     if expected == current:
         return Check("identity-stable", True, "device identity unchanged")
     return Check(
         "identity-stable",
         False,
-        f"device identity changed since confirmation: was [{expected}] now [{current}]",
+        f"device identity changed since confirmation: was {expected} now {current}",
     )
 
 

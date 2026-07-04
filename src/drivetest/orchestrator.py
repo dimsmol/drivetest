@@ -39,6 +39,7 @@ from .report import (
     VerifyOutcome,
     VerifyStatus,
     classify_smart,
+    describe_verdict,
     diff_smart,
     format_gib,
     health_regressions,
@@ -118,7 +119,7 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     logger.log(f"device : {dev.path}")
     logger.log(f"model  : {dev.model}")
     logger.log(f"serial : {dev.serial}")
-    logger.log(f"size   : {format_gib(dev.size)} ({dev.size} B)")
+    logger.log(f"size   : {format_gib(dev.size_bytes)} ({dev.size_bytes} B)")
     logger.log(f"bus    : {dev.tran}")
     logger.log(f"smart  : smartctl {' '.join(mode) or '(auto)'}")
     logger.log(f"logs   : {log_dir}/")
@@ -205,7 +206,7 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     logger.log("== summary ==")
     logger.log(f"write/verify : {verify.describe()}")
     logger.log(f"peak temp    : {peak} C")
-    logger.log(f"SMART diff   : {verdict.value}")
+    logger.log(f"SMART diff   : {describe_verdict(verdict)}")
     for d in deltas:
         logger.log(f"   {d.field}: {d.before} -> {d.after}")
     for r in regressions:
@@ -253,7 +254,7 @@ def _guard_and_confirm(config: RunConfig, ctx: RunContext, dev: Device, logger: 
     logger.log("")
     logger.log("*** WRITE mode will ERASE ALL DATA on:")
     logger.log(f"      {dev.path} | {dev.model} | serial {dev.serial} | "
-               f"{format_gib(dev.size)} | bus {dev.tran}")
+               f"{format_gib(dev.size_bytes)} | bus {dev.tran}")
     logger.log("")
 
     if not config.assume_yes:
@@ -303,7 +304,7 @@ def _write_phase(
         logger.log(f"   result: {result.value}")
         return VerifyOutcome(_REGION_TO_VERIFY[result])
 
-    regions = plan_regions(dev.size, config.parts)
+    regions = plan_regions(dev.size_bytes, config.parts)
     selected = parse_only_spec(config.only, config.parts) if config.only else None
     sel_desc = f"parts {config.only}" if config.only else "all parts"
     logger.log(
@@ -335,10 +336,14 @@ def _write_phase(
 
     if ran == 0:
         logger.log("   note: no parts ran")
-    # A --only subset that fully passed verifies only those parts, not the drive.
-    partial = status is VerifyStatus.PASS and config.only is not None
-    detail = f"parts {config.only} of {config.parts}" if partial else None
-    return VerifyOutcome(status, partial=partial, detail=detail)
+    # A --only subset that fully passed verifies only those parts, not the drive;
+    # the note's presence is what marks the outcome partial.
+    detail = (
+        f"parts {config.only} of {config.parts}"
+        if status is VerifyStatus.PASS and config.only is not None
+        else None
+    )
+    return VerifyOutcome(status, detail=detail)
 
 
 def _device_present(runner: Runner, dev: Device) -> bool:

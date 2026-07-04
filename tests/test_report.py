@@ -10,6 +10,7 @@ from drivetest.report import (
     VerifyOutcome,
     VerifyStatus,
     classify_smart,
+    describe_verdict,
     diff_smart,
     format_gib,
     health_regressions,
@@ -110,8 +111,15 @@ def test_verify_outcome_needs_attention():
 def test_verify_outcome_describe():
     assert VerifyOutcome(VerifyStatus.PASS).describe() == "PASS"
     assert VerifyOutcome(VerifyStatus.SKIPPED).describe() == "skipped"
-    partial = VerifyOutcome(VerifyStatus.PASS, partial=True, detail="parts 1-4 of 8")
+    partial = VerifyOutcome(VerifyStatus.PASS, detail="parts 1-4 of 8")
     assert partial.describe() == "PASS (parts 1-4 of 8 - not the whole drive)"
+
+
+def test_describe_verdict_renders_display_text():
+    # Display text is decoupled from the semantic enum member.
+    assert describe_verdict(SmartVerdict.CLEAN) == "clean"
+    assert "worsened" in describe_verdict(SmartVerdict.CHANGED)
+    assert "device may have dropped" in describe_verdict(SmartVerdict.UNKNOWN)
 
 
 def test_format_gib():

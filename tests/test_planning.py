@@ -78,6 +78,9 @@ def test_quick_region_is_a_leading_span():
         ("1-", 3, {1, 2, 3}),
         (" 2 , 4 ", 8, {2, 4}),  # whitespace tolerated
         ("3-3", 8, {3}),
+        ("1,1", 8, {1}),  # duplicate collapses
+        ("1-3,2-4", 8, {1, 2, 3, 4}),  # overlapping ranges union
+        ("1 - 4", 8, {1, 2, 3, 4}),  # whitespace inside a range
     ],
 )
 def test_parse_only_spec_valid(spec, parts, expected):
@@ -96,8 +99,21 @@ def test_parse_only_spec_valid(spec, parts, expected):
         ("1,,2", 8),    # empty item
         ("", 8),        # empty spec
         ("-3", 8),      # missing head
+        ("9-", 8),      # open range with out-of-range head
+        ("1-2-3", 8),   # multiple dashes
+        ("²", 8),       # non-ASCII digit (isdigit true, int would reject)
     ],
 )
 def test_parse_only_spec_invalid(spec, parts):
     with pytest.raises(ValueError):
         parse_only_spec(spec, parts)
+
+
+def test_parse_only_spec_rejects_bad_parts():
+    with pytest.raises(ValueError):
+        parse_only_spec("1", 0)
+
+
+def test_region_indices_are_sequential():
+    regions = plan_regions(100 * MIB, 5)
+    assert [r.index for r in regions] == [1, 2, 3, 4, 5]

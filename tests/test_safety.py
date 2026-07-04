@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
+import pytest
+
 from drivetest.devices import Device, parse_lsblk
 from drivetest.safety import (
     BlankProbe,
@@ -107,6 +111,11 @@ def test_missing_serial_rejected():
     assert not check_serial_unique(_disk(serial=None), []).ok
 
 
+def test_empty_string_serial_rejected():
+    # A cheap USB bridge reporting a blank serial must fail closed, same as None.
+    assert not check_serial_unique(_disk(serial=""), []).ok
+
+
 def test_duplicate_serial_rejected():
     dev = _disk(serial="DUP")
     assert not check_serial_unique(dev, ["DUP", "DUP", "OTHER"]).ok
@@ -120,11 +129,18 @@ def test_unique_serial_accepted():
 # --- identity stability ---------------------------------------------------
 
 def test_identity_change_detected():
-    assert not check_identity_stable("A|B|1|M", "A|B|2|M").ok
+    # Same serial/wwn/model, different size -> reassigned node.
+    assert not check_identity_stable(("A", "B", 1, "M"), ("A", "B", 2, "M")).ok
 
 
 def test_identity_unchanged():
-    assert check_identity_stable("x", "x").ok
+    assert check_identity_stable(("A", "B", 1, "M"), ("A", "B", 1, "M")).ok
+
+
+def test_identity_distinguishes_none_from_empty():
+    # The tuple form keeps a missing field distinct from an empty string, which a
+    # delimiter-joined string could have collided.
+    assert not check_identity_stable((None, None, 1, "M"), ("", "", 1, "M")).ok
 
 
 # --- composition ----------------------------------------------------------
@@ -209,7 +225,8 @@ def test_force_does_not_bypass_mount_or_system_guards():
     assert "not-system-disk" in failures
 
 
-def test_check_dataclass_repr_stable():
-    # sanity: Check is a simple value object
+def test_check_is_an_immutable_value_object():
     c = Check("x", True, "d")
-    assert (c.name, c.ok, c.detail) == ("x", True, "d")
+    assert c == Check("x", True, "d")  # compares by value
+    with pytest.raises(FrozenInstanceError):
+        c.ok = False  # type: ignore[misc]  # frozen: assignment must raise
