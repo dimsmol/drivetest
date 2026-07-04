@@ -9,6 +9,7 @@ import shutil
 
 import pytest
 
+from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.fio import (
     FioRunner,
     RegionResult,
@@ -19,11 +20,10 @@ from drivetest.fio import (
     parse_read_json,
 )
 from drivetest.planning import Region
-from drivetest.thermal import ThermalPolicy
 
 from .conftest import collect_sleep, load_json
 
-POLICY = ThermalPolicy()
+POLICY = DEFAULT_THERMAL_POLICY
 
 
 # --- argv building --------------------------------------------------------

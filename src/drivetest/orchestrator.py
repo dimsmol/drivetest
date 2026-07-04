@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TextIO
 
 from . import smart
+from .config import RunConfig
 from .devices import Device, all_serials, find_device, list_devices
 from .fio import (
     FioRunner,
@@ -48,7 +49,7 @@ from .safety import (
     evaluate_write_safety,
 )
 from .smart import SmartInfo
-from .thermal import ThermalController, ThermalPolicy
+from .thermal import ThermalController
 from .tools import missing_tools, required_tools
 
 EXIT_OK = 0
@@ -64,30 +65,19 @@ _REGION_TO_VERIFY: dict[RegionResult, VerifyStatus] = {
 }
 
 
-@dataclass(frozen=True)
-class Options:
-    """A validated run configuration (produced by the CLI, consumed here)."""
-
-    device: str
-    write: bool = False
-    quick: bool = False
-    force: bool = False
-    parts: int = 1
-    only: str | None = None
-    assume_yes: bool = False
-    log_dir: str | None = None
-
-
 def _timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 @dataclass
 class RunContext:
-    """Injected effects for a run (all have production defaults)."""
+    """Injected effects for a run (all have production defaults).
+
+    Effects only - the configuration (including the thermal policy) travels
+    separately in :class:`~drivetest.config.RunConfig`.
+    """
 
     runner: Runner = field(default_factory=SubprocessRunner)
-    policy: ThermalPolicy = field(default_factory=ThermalPolicy)
     workdir: Path = field(default_factory=lambda: Path("."))
     sleep: Callable[[float], None] = time.sleep
     popen: PopenFactory = default_popen
@@ -96,12 +86,12 @@ class RunContext:
     stamp: str | None = None
 
 
-def run(options: Options, ctx: RunContext | None = None) -> int:
+def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     ctx = ctx or RunContext()
     runner = ctx.runner
 
     # --- required tools ---------------------------------------------------
-    missing = missing_tools(required_tools(options.device))
+    missing = missing_tools(required_tools(config.device))
     if missing:
         print(f"error: missing required tools: {' '.join(missing)}")
         print("install them, e.g.: nix-shell -p fio smartmontools nvme-cli usbutils")
@@ -109,7 +99,7 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
 
     # --- resolve the device ----------------------------------------------
     try:
-        dev = find_device(runner, options.device)
+        dev = find_device(runner, config.device)
     except LookupError as exc:
         print(f"error: {exc}")
         return EXIT_REFUSED
@@ -130,12 +120,12 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
     logger.log(f"bus    : {dev.tran}")
     logger.log(f"smart  : smartctl {' '.join(mode) or '(auto)'}")
     logger.log(f"logs   : {log_dir}/")
-    logger.log(f"mode   : {'READ + DESTRUCTIVE WRITE/VERIFY' if options.write else 'read-only'}")
+    logger.log(f"mode   : {'READ + DESTRUCTIVE WRITE/VERIFY' if config.write else 'read-only'}")
     logger.log("")
 
     # --- safety + confirmation (write only) ------------------------------
-    if options.write:
-        rc = _guard_and_confirm(options, ctx, dev, logger)
+    if config.write:
+        rc = _guard_and_confirm(config, ctx, dev, logger)
         if rc != EXIT_OK:
             return rc
 
@@ -149,11 +139,11 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
         return t
 
     thermal = ThermalController(
-        ctx.policy, read_temp, sleep=ctx.sleep, log=lambda m: logger.log(f"   {m}")
+        config.policy, read_temp, sleep=ctx.sleep, log=lambda m: logger.log(f"   {m}")
     )
     fio_runner = FioRunner(
         read_temp=read_temp,
-        policy=ctx.policy,
+        policy=config.policy,
         sleep=ctx.sleep,
         popen=ctx.popen,
         # Live fio progress to the console; full output is also saved to the log
@@ -170,13 +160,13 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
 
     # --- write + verify ---------------------------------------------------
     verify = VerifyOutcome(VerifyStatus.SKIPPED)
-    if options.write:
-        verify = _write_phase(options, ctx, dev, logger, thermal, fio_runner, log_dir)
+    if config.write:
+        verify = _write_phase(config, ctx, dev, logger, thermal, fio_runner, log_dir)
         logger.log(f"   write/verify: {verify.describe()}")
         logger.log("")
 
     # --- did the device survive? -----------------------------------------
-    dev_gone = options.write and not _device_present(runner, dev)
+    dev_gone = config.write and not _device_present(runner, dev)
     if dev_gone:
         logger.log(f"!! {dev.path} is gone or changed identity since the write started.")
         logger.log("   It dropped off the bus (commonly a thermal disconnect on a passive")
@@ -222,14 +212,14 @@ def run(options: Options, ctx: RunContext | None = None) -> int:
 # --- helpers --------------------------------------------------------------
 
 
-def _guard_and_confirm(options: Options, ctx: RunContext, dev: Device, logger: Logger) -> int:
+def _guard_and_confirm(config: RunConfig, ctx: RunContext, dev: Device, logger: Logger) -> int:
     """Run the pre-write guards, print failures, and take confirmation."""
     root = gather_root_info(ctx.runner)
     probe = gather_blank_probe(ctx.runner, dev)
     serials = all_serials(list_devices(ctx.runner))
 
     checks = evaluate_write_safety(
-        dev, root=root, probe=probe, all_serials=serials, force=options.force
+        dev, root=root, probe=probe, all_serials=serials, force=config.force
     )
     for check in checks:
         marker = "ok" if check.ok else "REFUSE"
@@ -247,7 +237,7 @@ def _guard_and_confirm(options: Options, ctx: RunContext, dev: Device, logger: L
                f"{format_gib(dev.size)} | bus {dev.tran}")
     logger.log("")
 
-    if not options.assume_yes:
+    if not config.assume_yes:
         answer = ctx.confirm(f"Type the serial ({dev.serial}) to confirm: ")
         if answer.strip() != dev.serial or not dev.serial:
             logger.log("aborted (serial mismatch or empty).")
@@ -271,14 +261,14 @@ def _guard_and_confirm(options: Options, ctx: RunContext, dev: Device, logger: L
 
 
 def _write_phase(
-    options: Options, ctx: RunContext, dev: Device, logger: Logger,
+    config: RunConfig, ctx: RunContext, dev: Device, logger: Logger,
     thermal: ThermalController, fio_runner: FioRunner, log_dir: Path,
 ) -> VerifyOutcome:
     """Run the quick or paced full write+verify."""
-    if options.quick:
-        region = quick_region()
+    if config.quick:
+        region = quick_region(config.quick_bytes)
         logger.log(f">> write+verify (crc32c, first {format_gib(region.size)} quick); "
-                   f"ceiling {ctx.policy.ceiling_c} C")
+                   f"ceiling {config.policy.ceiling_c} C")
         if thermal.prestart_ok():
             result = fio_runner.run_region(dev.path, region, log_dir / "fio_writeverify.log")
         else:
@@ -286,21 +276,21 @@ def _write_phase(
         logger.log(f"   result: {result.value}")
         return VerifyOutcome(_REGION_TO_VERIFY[result])
 
-    regions = plan_regions(dev.size, options.parts)
-    selected = parse_only_spec(options.only, options.parts) if options.only else None
-    sel_desc = f"parts {options.only}" if options.only else "all parts"
+    regions = plan_regions(dev.size, config.parts)
+    selected = parse_only_spec(config.only, config.parts) if config.only else None
+    sel_desc = f"parts {config.only}" if config.only else "all parts"
     logger.log(
-        f">> write+verify (crc32c, full) in {options.parts} part(s), running {sel_desc}; "
-        f"ceiling {ctx.policy.ceiling_c} C, cool to {ctx.policy.cool_target_c} C before each"
+        f">> write+verify (crc32c, full) in {config.parts} part(s), running {sel_desc}; "
+        f"ceiling {config.policy.ceiling_c} C, cool to {config.policy.cool_target_c} C before each"
     )
 
     status = VerifyStatus.PASS
     ran = 0
     for region in regions:
         if selected is not None and region.index not in selected:
-            logger.log(f">> part {region.index}/{options.parts}: skipped (not selected)")
+            logger.log(f">> part {region.index}/{config.parts}: skipped (not selected)")
             continue
-        logger.log(f">> part {region.index}/{options.parts}  "
+        logger.log(f">> part {region.index}/{config.parts}  "
                    f"offset={format_gib(region.offset)}  size={format_gib(region.size)}")
         if not thermal.prestart_ok():
             status = VerifyStatus.OVERHEAT
@@ -319,8 +309,8 @@ def _write_phase(
     if ran == 0:
         logger.log("   note: no parts ran")
     # A --only subset that fully passed verifies only those parts, not the drive.
-    partial = status is VerifyStatus.PASS and options.only is not None
-    detail = f"parts {options.only} of {options.parts}" if partial else None
+    partial = status is VerifyStatus.PASS and config.only is not None
+    detail = f"parts {config.only} of {config.parts}" if partial else None
     return VerifyOutcome(status, partial=partial, detail=detail)
 
 

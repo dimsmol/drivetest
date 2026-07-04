@@ -1,6 +1,6 @@
 # drivetest
 
-> **Authorship / disclaimer.** Most of the code in this project was produced by Claude Code (Anthropic's agentic coding CLI), using the Claude Opus 4.8 (1M context) model, working iteratively with the author. Considerable effort went into keeping the quality reasonable - comprehensive unit and integration tests over real-hardware JSON fixtures, strict type checking (`pyright`), linting (`ruff`), an enforced layered architecture (`import-linter`), and several review passes. Even so, this tool performs **destructive disk writes**. It has not been independently audited; independent review is welcome and strongly advised before relying on it.
+> **Disclaimer.** Most of the code in this project was produced by Claude Code (Anthropic's agentic coding CLI), using the Claude Opus 4.8 (1M context) model, working iteratively with the author. Even though considerable effort went into keeping the quality reasonable, this tool performs **destructive disk writes**. It has not been independently audited; independent review is welcome and strongly advised before relying on it.
 
 `drivetest` runs a health-and-integrity battery against a storage device: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder. It works for a drive in a USB enclosure (`/dev/sdX`) and for an NVMe drive in an M.2 slot (`/dev/nvmeXn1`).
 
@@ -13,23 +13,26 @@ For a worked end-to-end example - screening a new SSD in a passive USB enclosure
 Everything runs as root (SMART and raw device IO need it), so the commands below use `sudo`.
 
 Identify the device node and confirm it is the right one:
+
 ```bash
 lsblk -o NAME,SIZE,MODEL,TRAN,SERIAL
 ```
 
 Read-only health + read benchmarks (never writes):
+
 ```bash
 sudo ./drivetest /dev/sdX
 ```
 
 Destructive full write+verify (crc32c) then health + benchmarks (**wipes the drive**):
+
 ```bash
 sudo ./drivetest --write /dev/sdX
 ```
 
 Useful flags:
 
-- `--quick` - write+verify only the first 50 GiB, for a fast sanity pass.
+- `--quick` - write+verify only the first `quick_bytes` (`QUICK_BYTES` by default), for a fast sanity pass.
 - `--parts N` - split the write+verify into N regions with a cooldown before each (see [Thermal pacing](#thermal-pacing-passive-enclosures)).
 - `--only SPEC` - run just some of the N parts (e.g. `--only 1-4`), to break and resume.
 - `--force` - override the blank-disk guard (see [Safety](#safety)); use only when certain.
@@ -40,13 +43,13 @@ Pass = write/verify PASS, SMART diff clean, temperature stayed within limits.
 
 **Passive (fanless) enclosures overheat on a sustained full write.** A continuous multi-TB write in a fanless USB enclosure climbs steadily past the drive's ~75-80 C throttle point, and the USB bridge eventually drops off the bus - which fails the test with no integrity result. Two mitigations, combine as needed:
 
-- `--parts N` splits the write+verify into N regions, cooling the drive to <= 50 C before each, so heat never accumulates. Start around `--parts 8` for a passive enclosure. Before each region it also refuses to start if the drive is still hot (> 55 C after cooling), and while a region runs it enforces a hard ceiling (78 C): if reached, `fio` is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
+- `--parts N` splits the write+verify into N regions, cooling the drive to the policy's `cool_target_c` before each, so heat never accumulates. Start around `--parts 8` for a passive enclosure. Before each region it also refuses to start if the drive is still hotter than `start_max_c` after cooling, and while a region runs it enforces the hard `ceiling_c`: if reached, `fio` is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
 - `--only SPEC` runs just some of the N parts, so you can break and resume without redoing everything. SPEC is a comma list of parts/ranges over the **same** `--parts N`, e.g. `--only 1-4` now and `--only 5-8` later (or `--only 6` to redo a single region). Always pass the same `--parts N` when resuming - region boundaries depend on it.
 - A **fan** on the enclosure is the real fix - even a cheap desk fan drops it several degrees and may let a single `--write` pass complete.
 
 Resuming across sessions: each `--only` run reports `PASS (parts X of N ...)` for just the parts it ran - the drive is fully verified only once every part has passed across your runs.
 
-The thermal thresholds (ceiling, cool-to target, start-max, max wait) are policy constants in the `thermal` module; tune them there for a different enclosure.
+All the tunable defaults live in one place, the `config` module: `QUICK_BYTES` and `DEFAULT_PARTS`, plus `DEFAULT_THERMAL_POLICY` (the `ceiling_c` / `cool_target_c` / `start_max_c` / `cool_max_wait_s` / ... thresholds). They are the field defaults of `RunConfig`; the CLI resolves a `RunConfig` from them and the orchestrator consumes it, so this is the only place to adjust for a different drive or enclosure.
 
 ## Safety
 
@@ -78,6 +81,7 @@ Modules, each useful on its own:
 - `proc` - a thin, mockable subprocess seam (run a command, parse JSON).
 - `tools` - check that required external CLIs are present.
 - `units` - binary size constants (`KIB`/`MIB`/`GIB`).
+- `config` - the resolved `RunConfig` and all default values (sizing + thermal policy).
 - `devices` - enumerate block devices and model their identity (`lsblk`).
 - `safety` - the destructive-write guards (all pure decisions over gathered data).
 - `smart` - read SMART/health/temperature via `smartctl`/`nvme`.
@@ -86,7 +90,7 @@ Modules, each useful on its own:
 - `fio` - build and run fio write+verify and read benchmarks.
 - `probe` - gather the IO inputs (`wipefs`/`findmnt`/`/sys`) the guards consume.
 - `report` - summary, SMART diff and result classification.
-- `cli` / `orchestrator` - argument parsing and the end-to-end run.
+- `cli` / `orchestrator` - `cli` resolves flags into a `RunConfig`; `orchestrator` consumes it and runs the end-to-end battery.
 
 The import graph is acyclic and layered; `pyproject.toml` encodes the layering as an `import-linter` contract.
 

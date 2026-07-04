@@ -44,8 +44,9 @@ layers = [
     "orchestrator",
     "probe",
     "safety | report | fio",
-    "planning | devices | smart",
-    "units | proc | tools | thermal",
+    "config",
+    "planning | devices | smart | thermal",
+    "units | proc | tools",
 ]
 
 [tool.pytest.ini_options]

@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from drivetest.cli import Options
+from drivetest.config import RunConfig
 from drivetest.fio import RegionResult
 from drivetest.orchestrator import (
     _REGION_TO_VERIFY,
@@ -21,7 +21,6 @@ from drivetest.orchestrator import (
     run,
 )
 from drivetest.proc import Result
-from drivetest.thermal import ThermalPolicy
 
 from .conftest import FakeRunner, load_text
 
@@ -45,7 +44,6 @@ def _ctx(runner, tmp_path, **kw) -> RunContext:
         stamp="TEST",
         sleep=lambda _s: None,
         confirm=kw.pop("confirm", lambda _p: ""),
-        policy=kw.pop("policy", ThermalPolicy()),
         **kw,
     )
 
@@ -59,7 +57,7 @@ def test_readonly_happy_path(tmp_path):
     runner.add("fio", contains=["seqread"], stdout=load_text("fio_seqread.json"))
     runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
 
-    code = run(Options(device="/dev/sda", write=False), _ctx(runner, tmp_path))
+    code = run(RunConfig(device="/dev/sda", write=False), _ctx(runner, tmp_path))
     assert code == EXIT_OK
 
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
@@ -83,7 +81,7 @@ def test_write_refused_on_system_disk(tmp_path):
 
     confirmed = []
     ctx = _ctx(runner, tmp_path, confirm=lambda p: confirmed.append(p) or "")
-    code = run(Options(device="/dev/nvme0n1", write=True, assume_yes=False), ctx)
+    code = run(RunConfig(device="/dev/nvme0n1", write=True, assume_yes=False), ctx)
 
     assert code == EXIT_REFUSED
     summary = (tmp_path / "drive_test_S3ZHNF0KC28756_TEST" / "summary.log").read_text()
@@ -96,7 +94,7 @@ def test_write_refused_on_system_disk(tmp_path):
 def test_device_not_found(tmp_path):
     runner = FakeRunner()
     runner.add("lsblk", contains=["-Jb"], stdout='{"blockdevices": []}')
-    code = run(Options(device="/dev/nope", write=False), _ctx(runner, tmp_path))
+    code = run(RunConfig(device="/dev/nope", write=False), _ctx(runner, tmp_path))
     assert code == EXIT_REFUSED
 
 
@@ -133,5 +131,5 @@ def test_readonly_flags_worsened_smart(tmp_path):
     runner.add("fio", contains=["seqread"], stdout=load_text("fio_seqread.json"))
     runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
 
-    code = run(Options(device="/dev/sda", write=False), _ctx(runner, tmp_path))
+    code = run(RunConfig(device="/dev/sda", write=False), _ctx(runner, tmp_path))
     assert code == EXIT_ATTENTION

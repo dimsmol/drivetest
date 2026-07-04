@@ -1,8 +1,10 @@
-"""Command-line interface: parse arguments into a validated :class:`Options`.
+"""Command-line interface: resolve arguments into a :class:`RunConfig`.
 
-``parse_args`` is pure (takes an argv list, returns Options or raises
-SystemExit), so option validation is unit-tested without running anything.
-``main`` wires Options to the orchestrator.
+This is the boundary that decides the run: it starts from the defaults in
+:mod:`drivetest.config` and overrides them with the parsed flags, then hands the
+finished config to the orchestrator. ``parse_args`` is pure (takes an argv list,
+returns RunConfig or raises SystemExit), so validation is unit-tested without
+running anything.
 """
 
 from __future__ import annotations
@@ -11,18 +13,24 @@ import argparse
 import os
 import sys
 
-from .orchestrator import Options, RunContext, run
+from .config import DEFAULT_PARTS, QUICK_BYTES, RunConfig
+from .orchestrator import RunContext, run
 from .planning import parse_only_spec
+from .units import GIB
 
 PROG = "drivetest"
 
 DESCRIPTION = "Health, integrity and performance test for an SSD/NVMe drive."
 
-EPILOG = """\
+# Human label for the --quick span, derived from the constant so help text and
+# the value stay in step.
+QUICK_BYTES_LABEL = f"{QUICK_BYTES // GIB}G"
+
+EPILOG = f"""\
 examples:
   sudo drivetest /dev/sdb                         health + read benchmarks only
   sudo drivetest --write /dev/sdb                 + full destructive write+verify
-  sudo drivetest --write --quick /dev/sdb         + verify only the first 50G
+  sudo drivetest --write --quick /dev/sdb         + verify only the first {QUICK_BYTES_LABEL}
   sudo drivetest --write --parts 8 /dev/sdb       paced full write for a passive enclosure
   sudo drivetest --write --parts 8 --only 1-4 /dev/sdb   first half now
   sudo drivetest --write --parts 8 --only 5-8 /dev/sdb   the rest later
@@ -48,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--quick",
         action="store_true",
-        help="with --write, verify only the first 50G (fast sanity check)",
+        help=f"with --write, verify only the first {QUICK_BYTES_LABEL} (fast sanity check)",
     )
     parser.add_argument(
         "--force",
@@ -58,9 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--parts",
         type=int,
-        default=1,
+        default=DEFAULT_PARTS,
         metavar="N",
-        help="split the full write+verify into N cooled regions (default 1)",
+        help=f"split the full write+verify into N cooled regions (default {DEFAULT_PARTS})",
     )
     parser.add_argument(
         "--only",
@@ -80,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def parse_args(argv: list[str]) -> Options:
+def parse_args(argv: list[str]) -> RunConfig:
     """Parse and validate argv. Exits (SystemExit) on any invalid combination."""
     parser = build_parser()
     ns = parser.parse_args(argv)
@@ -99,7 +107,9 @@ def parse_args(argv: list[str]) -> Options:
     if ns.force and not ns.write:
         parser.error("--force only applies together with --write")
 
-    return Options(
+    # Start from the defaults baked into RunConfig and override with the parsed
+    # flags; unset knobs (quick_bytes, thermal policy) keep their defaults.
+    return RunConfig(
         device=ns.device,
         write=ns.write,
         quick=ns.quick,

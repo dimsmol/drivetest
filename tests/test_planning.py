@@ -60,8 +60,9 @@ def test_plan_regions_rejects_bad_input():
         plan_regions(MIB - 1, 4)  # each part would round to 0 bytes
 
 
-def test_quick_region_defaults_to_50g_from_zero():
-    region = quick_region()
+def test_quick_region_is_a_leading_span():
+    region = quick_region(50 * 1024**3)
+    assert region.index == 1
     assert region.offset == 0
     assert region.size == 50 * 1024**3
 

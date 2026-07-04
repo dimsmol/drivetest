@@ -23,18 +23,19 @@ Temp = int | None
 
 @dataclass(frozen=True)
 class ThermalPolicy:
-    """Tunable thermal thresholds, all in Celsius (plus a wait cap in seconds).
+    """Tunable thermal thresholds (Celsius; waits/cadences in seconds).
 
-    Defaults are set for the *bridge's* drop point (~83 C observed), not the
-    drive's own 90 C warning: the ceiling leaves margin below the disconnect.
+    A pure data structure with no built-in defaults - the canonical values live
+    in :mod:`drivetest.config` as ``DEFAULT_THERMAL_POLICY``, where each field's
+    meaning is documented.
     """
 
-    ceiling_c: int = 78       # abort a running region at/above this
-    cool_target_c: int = 50   # cool to this before each region
-    start_max_c: int = 55     # refuse to start a region above this
-    cool_max_wait_s: int = 1200  # never wait longer than this to cool
-    poll_interval_s: float = 5.0   # temperature sampling cadence during a write
-    cool_interval_s: float = 20.0  # sampling cadence while cooling
+    ceiling_c: int
+    cool_target_c: int
+    start_max_c: int
+    cool_max_wait_s: int
+    poll_interval_s: float
+    cool_interval_s: float
 
 
 def exceeds_ceiling(temp: Temp, policy: ThermalPolicy) -> bool:

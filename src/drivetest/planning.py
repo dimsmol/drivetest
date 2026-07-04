@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .units import GIB, MIB
-
-DEFAULT_QUICK_BYTES = 50 * GIB
+from .units import MIB
 
 
 @dataclass(frozen=True)
@@ -54,7 +52,7 @@ def plan_regions(dev_bytes: int, parts: int) -> list[Region]:
     return regions
 
 
-def quick_region(size_bytes: int = DEFAULT_QUICK_BYTES) -> Region:
+def quick_region(size_bytes: int) -> Region:
     """A single leading region for a fast ``--quick`` sanity pass."""
     return Region(index=1, offset=0, size=size_bytes)
 

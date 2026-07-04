@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.thermal import (
     ThermalController,
-    ThermalPolicy,
     can_start,
     exceeds_ceiling,
     needs_cooldown,
@@ -12,7 +14,7 @@ from drivetest.thermal import (
 
 from .conftest import collect_sleep
 
-POLICY = ThermalPolicy()
+POLICY = DEFAULT_THERMAL_POLICY
 
 
 def test_pure_thresholds():
@@ -62,7 +64,7 @@ def test_cooldown_pauses_once_when_unreadable():
 
 def test_cooldown_gives_up_after_max_wait():
     # never cools; capped by cool_max_wait_s / cool_interval_s iterations
-    policy = ThermalPolicy(cool_max_wait_s=60, cool_interval_s=20)
+    policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=60, cool_interval_s=20)
     ctrl, _slept = _controller([80] * 100, policy)
     outcome = ctrl.cooldown()
     assert not outcome.reached_target
@@ -82,6 +84,6 @@ def test_prestart_cools_then_proceeds():
 
 def test_prestart_refuses_when_still_hot_after_cooldown():
     # hot start, cooldown caps out still hot, final sample above start_max
-    policy = ThermalPolicy(cool_max_wait_s=20, cool_interval_s=20)
+    policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=20, cool_interval_s=20)
     ctrl, _ = _controller([70, 70, 70], policy)
     assert not ctrl.prestart_ok()
