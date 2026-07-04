@@ -162,6 +162,24 @@ def test_readonly_flags_worsened_smart(tmp_path):
     assert code == EXIT_ATTENTION
 
 
+def test_readonly_read_benchmark_io_error_is_attention(tmp_path):
+    # A read benchmark whose fio job reports an IO error (unreadable sectors) must
+    # raise the run to ATTENTION and be surfaced, not buried as "could not parse".
+    runner = FakeRunner()
+    runner.add("lsblk", contains=["-Jb"], stdout=load_text("lsblk_usb_sda.json"))
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    runner.add("fio", contains=["seqread"], stdout='{"jobs": [{"error": 5, "read": {}}]}')
+    runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
+
+    code = run(_config("/dev/sda"), _ctx(runner, tmp_path))
+    assert code == EXIT_ATTENTION
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "read error" in summary
+    assert "unreadable sectors" in summary
+
+
 # --- destructive write paths ----------------------------------------------
 
 
@@ -260,6 +278,27 @@ def test_write_phase_error_reports_incomplete(tmp_path):
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "RESULT: INCOMPLETE" in summary
     assert "write phase failed" in summary
+
+
+def test_post_write_reporting_error_reports_incomplete_not_refused(tmp_path, monkeypatch):
+    # An unexpected error AFTER the destructive write (here: reading benchmarks)
+    # must not escape as exit 1 - which the contract reserves for "refused,
+    # nothing written" - but become an INCOMPLETE attention exit.
+    def boom(*_args, **_kwargs):
+        raise OSError("log volume disappeared")
+
+    monkeypatch.setattr("drivetest.orchestrator._read_benchmarks", boom)
+    runner = _write_runner()
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda _argv: _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_ATTENTION  # not EXIT_REFUSED
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "post-write reporting failed" in summary
+    assert "device was written" in summary
 
 
 class _LsblkSequenceRunner(FakeRunner):

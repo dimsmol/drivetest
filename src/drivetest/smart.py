@@ -182,8 +182,11 @@ def detect_access_mode(runner: Runner, dev_path: str) -> list[str]:
     for mode in ACCESS_MODES:
         result = runner.run(["smartctl", "--json", "-i", *mode, dev_path])
         try:
-            info = parse_smart_json(result.json())
-        except ValueError:
+            data: dict[str, Any] = result.json()
+            info = parse_smart_json(data)
+        # AttributeError/TypeError guard valid-but-non-object JSON (null, a bare
+        # array/number): .get would raise rather than JSONDecodeError. Skip it.
+        except (ValueError, AttributeError, TypeError):
             continue
         if info.has_report:
             return list(mode)
@@ -198,9 +201,12 @@ def read_smart(runner: Runner, dev_path: str, mode: list[str]) -> SmartInfo:
     result = runner.run(["smartctl", "--json", "-x", *mode, dev_path])
     try:
         obj: dict[str, Any] = result.json()
-    except ValueError:
+        return parse_smart_json(obj)
+    # ValueError = not valid JSON (device dropped, smartctl printed an error);
+    # AttributeError/TypeError = valid-but-non-object JSON (null, [], a number)
+    # whose .get would raise. Both fail closed to a no-report SmartInfo.
+    except (ValueError, AttributeError, TypeError):
         return SmartInfo(raw=None)
-    return parse_smart_json(obj)
 
 
 def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | None:

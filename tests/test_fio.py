@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import io
 import shutil
+import subprocess
 
 import pytest
 
 from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.fio import (
+    FioReadError,
     FioRunner,
     ReadKind,
     RegionResult,
@@ -86,6 +88,18 @@ def test_parse_read_json_raises_on_job_error():
     # A non-zero fio job error means the run failed; its numbers are unreliable.
     with pytest.raises(ValueError):
         parse_read_json({"jobs": [{"error": 5, "read": {"bw_bytes": 1, "iops": 1}}]}, ReadKind.SEQ)
+
+
+def test_parse_read_json_job_error_is_a_distinct_fioreaderror():
+    # A real read failure raises FioReadError (a ValueError subclass), so the
+    # caller can tell it apart from merely-unparseable output and surface it.
+    with pytest.raises(FioReadError):
+        parse_read_json({"jobs": [{"error": 5, "read": {}}]}, ReadKind.SEQ)
+    assert issubclass(FioReadError, ValueError)
+    # An unparseable/missing-figure result stays a plain ValueError, not FioReadError.
+    with pytest.raises(ValueError) as exc:
+        parse_read_json({"jobs": [{"read": {"iops": 10}}]}, ReadKind.SEQ)
+    assert not isinstance(exc.value, FioReadError)
 
 
 def test_parse_read_json_raises_on_missing_bandwidth():
@@ -240,6 +254,127 @@ def test_run_region_drains_all_output_before_closing_log_on_error(tmp_path):
         runner.run_region("/dev/sdx", Region(1, 0, 1024), log)
     assert proc.terminated
     assert log.read_text() == "line1\nline2\n"
+
+
+class _FinishingProc:
+    """A fio stand-in that stays alive for ``alive_polls`` monitor iterations and
+    then exits with ``returncode`` on its own (no kill needed).
+    """
+
+    def __init__(self, returncode=0, alive_polls=2, stdout=""):
+        self._rc = returncode
+        self._polls = alive_polls
+        self.stdout = io.StringIO(stdout)
+        self.terminated = False
+
+    def poll(self):
+        if self._polls > 0:
+            self._polls -= 1
+            return None
+        return self._rc
+
+    def wait(self, timeout=None):
+        self._polls = 0
+        return self._rc
+
+    def terminate(self):
+        self.terminated = True
+        self._polls = 0
+
+    def kill(self):
+        self.terminated = True
+        self._polls = 0
+
+
+class _StubbornProc:
+    """A fio stand-in that ignores SIGTERM: ``terminate`` leaves it alive and
+    ``wait(timeout=...)`` times out, so :meth:`FioRunner._terminate` must escalate
+    to ``kill`` (SIGKILL).
+    """
+
+    def __init__(self):
+        self.stdout = io.StringIO("")
+        self.terminate_called = False
+        self.killed = False
+        self._alive = True
+
+    def poll(self):
+        return None if self._alive else -9
+
+    def wait(self, timeout=None):
+        if timeout is not None and self._alive:
+            raise subprocess.TimeoutExpired(cmd="fio", timeout=timeout)
+        return -9
+
+    def terminate(self):
+        self.terminate_called = True  # but the process stays alive
+
+    def kill(self):
+        self.killed = True
+        self._alive = False
+
+
+def _runner_for(proc, tmp_path, *, read_temp=lambda: 30, echo=lambda _line: None):
+    return FioRunner(
+        read_temp=read_temp,
+        policy=POLICY,
+        sleep=lambda _s: None,
+        popen=lambda _argv: proc,  # type: ignore[arg-type,return-value]
+        echo=echo,
+    )
+
+
+def test_run_region_fail_when_fio_exits_nonzero_while_cool(tmp_path):
+    # A verify mismatch: fio finishes cool with a non-zero exit -> FAIL, and since
+    # it exited on its own the process is never terminated.
+    proc = _FinishingProc(returncode=1)
+    runner = _runner_for(proc, tmp_path)
+    result = runner.run_region("/dev/sdx", Region(1, 0, 1024), tmp_path / "f.log")
+    assert result is RegionResult.FAIL
+    assert not proc.terminated
+
+
+def test_run_region_escalates_to_sigkill_when_fio_ignores_sigterm(tmp_path):
+    # A ceiling breach kills fio, but it ignores SIGTERM; _terminate must escalate
+    # to SIGKILL rather than hang, and the region is classified OVERHEAT.
+    proc = _StubbornProc()
+    runner = _runner_for(proc, tmp_path, read_temp=lambda: POLICY.ceiling_c)
+    result = runner.run_region("/dev/sdx", Region(1, 0, 1024), tmp_path / "f.log")
+    assert result is RegionResult.OVERHEAT
+    assert proc.terminate_called and proc.killed
+
+
+def test_run_region_does_not_launch_fio_if_log_open_fails(tmp_path):
+    # The evidence log is opened before fio starts; if that open fails we must not
+    # have launched a destructive write with nothing to drain or stop it.
+    launched = []
+
+    def popen(_argv):
+        launched.append(True)
+        return _FinishingProc(0)
+
+    runner = FioRunner(
+        read_temp=lambda: 30, policy=POLICY, sleep=lambda _s: None,
+        popen=popen,  # type: ignore[arg-type]  # test fake stands in for Popen
+        echo=lambda _line: None,
+    )
+    bad_log = tmp_path / "missing_dir" / "f.log"  # parent doesn't exist -> open fails
+    with pytest.raises(FileNotFoundError):
+        runner.run_region("/dev/sdx", Region(1, 0, 1024), bad_log)
+    assert launched == []  # fio was never started
+
+
+def test_run_region_raises_when_output_drain_fails(tmp_path):
+    # If the drain thread can't mirror fio's output (e.g. the log disk fills), the
+    # evidence log is incomplete, so run_region must raise rather than report PASS.
+    proc = _FinishingProc(returncode=0, stdout="line1\nline2\n")
+
+    def boom_echo(_line):
+        raise RuntimeError("log disk full")
+
+    runner = _runner_for(proc, tmp_path, echo=boom_echo)
+    with pytest.raises(RuntimeError, match="log disk full"):
+        runner.run_region("/dev/sdx", Region(1, 0, 1024), tmp_path / "f.log")
 
 
 # --- real fio integration (happy path) ------------------------------------

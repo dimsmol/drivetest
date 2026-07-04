@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from drivetest.smart import (
@@ -150,6 +152,45 @@ def test_read_smart_parses_valid_json(fake_runner: FakeRunner):
     fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
     info = read_smart(fake_runner, "/dev/sda", ["-d", "sntasmedia"])
     assert info.serial == "255106803016"
+
+
+def test_read_smart_fails_closed_on_non_object_json(fake_runner: FakeRunner):
+    # Valid JSON that isn't an object (null/list/number) parses fine but has no
+    # .get; it must degrade to a no-report SmartInfo, not raise from the parser.
+    fake_runner.add("smartctl", contains=["--json"], stdout="null")
+    info = read_smart(fake_runner, "/dev/sda", [])
+    assert not info.has_report
+
+
+def test_detect_access_mode_skips_non_object_json(fake_runner: FakeRunner):
+    # A bridge mode that returns non-object JSON must be skipped (no report), not
+    # crash on parse; with no mode yielding a report, detection falls back to bare.
+    fake_runner.add("smartctl", contains=["-i"], stdout="[]")
+    assert detect_access_mode(fake_runner, "/dev/sda") == []
+
+
+def test_read_temperature_smartctl_path_rejects_out_of_range(fake_runner: FakeRunner):
+    # The plausibility window guards the smartctl (non-NVMe) branch too, not just
+    # the nvme/Kelvin path: a garbage bridge temperature is dropped to None.
+    obj = {"model_name": "M", "serial_number": "S",
+           "temperature": {"current": MAX_PLAUSIBLE_TEMP_C + 50}}
+    fake_runner.add("smartctl", contains=["--json"], stdout=json.dumps(obj))
+    assert read_temperature(fake_runner, "/dev/sda", []) is None
+
+
+def test_int_field_rejects_json_bool():
+    # A JSON boolean must not be coerced to 0/1: a stray `media_errors: true` in a
+    # malformed report reads as unknown (None), never as a real count.
+    info = parse_smart_json(
+        {"model_name": "M", "nvme_smart_health_information_log": {"media_errors": True}}
+    )
+    assert info.media_errors is None
+
+
+def test_health_passed_requires_a_real_bool():
+    # Only a real JSON boolean is a verdict; a string "passed" is not a PASS.
+    info = parse_smart_json({"model_name": "M", "smart_status": {"passed": "true"}})
+    assert info.health_passed is None
 
 
 def test_read_temperature_nvme_json_kelvin(fake_runner: FakeRunner):

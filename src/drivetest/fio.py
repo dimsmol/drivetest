@@ -38,6 +38,11 @@ ETA_OPTS = ["--eta=always", "--eta-newline=30s"]
 # Seconds to wait after SIGTERM before escalating to SIGKILL when stopping fio.
 TERMINATE_GRACE_S = 10
 
+# Seconds to wait for the output-drain thread to finish after fio has stopped.
+# fio's stdout closes once it exits, so the drain normally ends promptly; this is
+# a backstop against an unbounded hang if the pipe somehow stays open.
+DRAIN_JOIN_TIMEOUT_S = 30
+
 # Throughput is conventionally reported in decimal MB/s (10^6 B/s), distinct from
 # the binary MiB (2^20) used for sizes elsewhere.
 MB = 1_000_000
@@ -148,19 +153,30 @@ def build_read_argv(dev_path: str, kind: ReadKind) -> list[str]:
     ]
 
 
+class FioReadError(ValueError):
+    """A read benchmark's fio job reported a non-zero ``error``.
+
+    A ``ValueError`` subclass so existing ``except ValueError`` callers still
+    treat it as an unusable result, but a distinct type so the caller can tell a
+    real read IO error (e.g. unreadable sectors) apart from unparseable output
+    and surface it instead of silently logging "could not parse".
+    """
+
+
 def parse_read_json(obj: dict[str, Any], kind: ReadKind) -> ReadStats:
     """Extract bandwidth and IOPS from fio's JSON for a read job.
 
-    Raises ``ValueError`` if the job failed (non-zero ``error``) or the numbers
-    are absent: a missing figure means the benchmark did not produce a result,
-    which must not be reported as a genuine 0 B/s.
+    Raises :class:`FioReadError` if the job failed (non-zero ``error``), or a
+    plain ``ValueError`` if the numbers are absent: a missing figure means the
+    benchmark did not produce a result, which must not be reported as a genuine
+    0 B/s.
     """
     jobs: list[Any] = obj.get("jobs") or []
     if not jobs:
         raise ValueError("fio JSON has no jobs")
     job: dict[str, Any] = jobs[0] or {}
     if job.get("error"):
-        raise ValueError(f"fio job reported error {job['error']}")
+        raise FioReadError(f"fio read job reported error {job['error']}")
     read: dict[str, Any] = job.get("read") or {}
     bw_bytes = read.get("bw_bytes")
     if bw_bytes is None:
@@ -252,26 +268,37 @@ class FioRunner:
         while monitoring temperature and aborting at the ceiling.
         """
         argv = build_writeverify_argv(dev_path, region)
-        proc = self._popen(argv)
 
         # Drain fio's combined output in a thread so the main thread is free to
-        # poll temperature and kill on a ceiling breach.
-        def drain(stream: TextIO, sink: TextIO) -> None:
-            for line in stream:
-                sink.write(line)
-                sink.flush()
-                self._echo(line)
+        # poll temperature and kill on a ceiling breach. Any error draining (e.g.
+        # the log disk fills) is recorded, not swallowed: it means the evidence
+        # log is incomplete, so run_region must not report a PASS on it.
+        drain_error: list[Exception] = []
 
-        with open(log_path, "w") as logf:
-            assert proc.stdout is not None
-            reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
-            reader.start()
-            # The inner finally runs before the log file closes, on every path
-            # (Ctrl-C, an error in the monitor, a kill): it stops fio - so we
-            # never leave a write running against the device - and only then
-            # joins the drain thread, so the thread can't write to a closed log
-            # (which would drop trailing output) and no line is lost.
+        def drain(stream: TextIO, sink: TextIO) -> None:
             try:
+                for line in stream:
+                    sink.write(line)
+                    sink.flush()
+                    self._echo(line)
+            except Exception as exc:
+                drain_error.append(exc)
+
+        # Open the log *before* launching fio: Popen begins writing the raw device
+        # immediately, so if the open failed after it, we would leave a destructive
+        # write running with nothing draining or stopping it.
+        with open(log_path, "w") as logf:
+            proc = self._popen(argv)
+            reader: threading.Thread | None = None
+            # This finally runs before the log file closes, on every path (Ctrl-C,
+            # an error in the monitor, a kill): it stops fio - so we never leave a
+            # write running against the device - and only then joins the drain
+            # thread, so the thread can't write to a closed log (which would drop
+            # trailing output) and no line is lost.
+            try:
+                assert proc.stdout is not None
+                reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
+                reader.start()
                 overheat = monitor_region(
                     is_alive=lambda: proc.poll() is None,
                     read_temp=self._read_temp,
@@ -284,7 +311,14 @@ class FioRunner:
             finally:
                 if proc.poll() is None:
                     self._terminate(proc)
-                reader.join()
+                if reader is not None:
+                    reader.join(DRAIN_JOIN_TIMEOUT_S)
+        # fio has stopped and its output is drained; if the drainer could not keep
+        # up or died, the log is untrustworthy - fail closed rather than classify.
+        if reader is not None and reader.is_alive():
+            raise RuntimeError(f"fio output drain did not finish within {DRAIN_JOIN_TIMEOUT_S}s")
+        if drain_error:
+            raise drain_error[0]
         return classify_region(overheat, returncode)
 
     @staticmethod

@@ -116,6 +116,13 @@ class SubprocessRunner:
             raise ToolNotFound(argv) from exc
         except subprocess.TimeoutExpired as exc:
             raise ProcTimeout(argv, timeout) from exc
+        except OSError as exc:
+            # A tool present but not executable (EACCES) or a bad path component
+            # (ENOTDIR) raises another OSError subclass rather than
+            # FileNotFoundError; translate it too so callers never see a raw
+            # subprocess/OS error, and an unusable tool fails closed like a
+            # missing one.
+            raise ToolNotFound(argv) from exc
         return Result(
             argv=tuple(argv),
             returncode=proc.returncode,

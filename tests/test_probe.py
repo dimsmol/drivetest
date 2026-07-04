@@ -54,6 +54,17 @@ def test_blank_probe_fails_closed_when_sys_dir_missing(fake_runner: FakeRunner, 
     assert not probe.is_blank
 
 
+def test_blank_probe_fails_closed_when_holders_dir_missing(fake_runner: FakeRunner, tmp_path):
+    # The device's /sys entry exists but has no holders/ subdir. A real whole disk
+    # always has one, so its absence is an abnormal state we must not read as "no
+    # holders, looks blank" - fail closed.
+    (tmp_path / "sdx").mkdir()  # device dir present, but no holders/ subdir
+    fake_runner.add("wipefs", stdout='{"signatures": []}')
+    probe = gather_blank_probe(fake_runner, _disk(), sys_block=str(tmp_path))
+    assert probe.probe_error
+    assert not probe.is_blank
+
+
 def test_blank_probe_fails_closed_on_malformed_wipefs_json(fake_runner: FakeRunner, tmp_path):
     # wipefs exits 0 but prints non-JSON: we can't confirm the disk is blank, so
     # the guard must fail closed rather than assume "no signatures".

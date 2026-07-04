@@ -27,6 +27,7 @@ from . import smart
 from .config import RunConfig
 from .devices import Device, all_serials, find_device, list_devices
 from .fio import (
+    FioReadError,
     FioRunner,
     PopenFactory,
     ReadKind,
@@ -187,51 +188,23 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
         logger.log(f"   write/verify: {verify.describe()}")
         logger.log("")
 
-    # --- did the device survive? -----------------------------------------
-    dev_gone = config.write and not _device_present(runner, dev)
-    if dev_gone:
-        logger.log(f"!! {dev.path} is gone or changed identity since the write started.")
-        logger.log("   It dropped off the bus (commonly a thermal disconnect on a passive")
-        logger.log("   USB enclosure). Skipping read benchmarks and post-SMART. Let it cool,")
-        logger.log("   replug, and resume with --only <remaining parts>.")
+    # --- post-write reporting: survival, benchmarks, SMART diff, summary --
+    # Once the destructive write has run, an unexpected error below (e.g. a failed
+    # log write, or fio/smartctl vanishing) must not escape as a bare traceback
+    # and exit 1 - the contract reserves 1 for "refused, nothing written". Report
+    # attention instead so the operator knows the device *was* written.
+    try:
+        return _report_and_finish(
+            config, runner, dev, mode, logger, log_dir, before, verify, temps
+        )
+    except (Exception, KeyboardInterrupt) as exc:
+        if not config.write:
+            raise
         logger.log("")
-
-    # --- read benchmarks --------------------------------------------------
-    if not dev_gone:
-        _read_benchmarks(runner, dev, logger, log_dir)
-
-    # --- SMART after + diff ----------------------------------------------
-    after = _smart_after(runner, dev, mode, log_dir / "smart_after.txt", dev_gone)
-    deltas = diff_smart(before, after)
-    regressions = health_regressions(before, after)
-    verdict = classify_smart(after, deltas, regressions)
-
-    # --- summary ----------------------------------------------------------
-    peak = max(temps) if temps else None
-    logger.log("== summary ==")
-    logger.log(f"write/verify : {verify.describe()}")
-    logger.log(f"peak temp    : {peak} C")
-    logger.log(f"SMART diff   : {describe_verdict(verdict)}")
-    for d in deltas:
-        logger.log(f"   {d.field}: {d.before} -> {d.after}")
-    for r in regressions:
-        logger.log(f"   {r}")
-    logger.log(f"full logs    : {log_dir}/")
-    logger.log("")
-
-    if dev_gone or verify.needs_attention or verdict is not SmartVerdict.CLEAN:
-        if dev_gone:
-            logger.log("RESULT: INCOMPLETE - device disconnected mid-run (likely thermal). "
-                       "Cool it, replug, and resume with --only.")
-        elif verify.status is VerifyStatus.OVERHEAT:
-            logger.log("RESULT: INCOMPLETE - stopped on temperature ceiling; "
-                       "use more --parts (and/or a fan).")
-        else:
-            logger.log("RESULT: ATTENTION NEEDED - inspect the logs above.")
+        logger.log(f"!! post-write reporting failed: {exc!r}")
+        logger.log("RESULT: INCOMPLETE - the device was written but the run could not finish "
+                   "reporting. Inspect the logs above and re-check SMART manually.")
         return EXIT_ATTENTION
-
-    logger.log("RESULT: OK")
-    return EXIT_OK
 
 
 # --- helpers --------------------------------------------------------------
@@ -378,13 +351,91 @@ def _smart_after(
     return _smart_snapshot(runner, dev, mode, text_path)
 
 
-def _read_benchmarks(runner: Runner, dev: Device, logger: Logger, log_dir: Path) -> None:
+def _report_and_finish(
+    config: RunConfig,
+    runner: Runner,
+    dev: Device,
+    mode: list[str],
+    logger: Logger,
+    log_dir: Path,
+    before: SmartInfo,
+    verify: VerifyOutcome,
+    temps: list[int],
+) -> int:
+    """Device-survival check, read benchmarks, post-run SMART diff and summary.
+
+    Returns the process exit code. Split out from :func:`run` so the whole
+    post-write tail can be wrapped in one error guard (see the call site).
+    """
+    # --- did the device survive? -----------------------------------------
+    dev_gone = config.write and not _device_present(runner, dev)
+    if dev_gone:
+        logger.log(f"!! {dev.path} is gone or changed identity since the write started.")
+        logger.log("   It dropped off the bus (commonly a thermal disconnect on a passive")
+        logger.log("   USB enclosure). Skipping read benchmarks and post-SMART. Let it cool,")
+        logger.log("   replug, and resume with --only <remaining parts>.")
+        logger.log("")
+
+    # --- read benchmarks --------------------------------------------------
+    read_error = False
+    if not dev_gone:
+        read_error = _read_benchmarks(runner, dev, logger, log_dir)
+
+    # --- SMART after + diff ----------------------------------------------
+    after = _smart_after(runner, dev, mode, log_dir / "smart_after.txt", dev_gone)
+    deltas = diff_smart(before, after)
+    regressions = health_regressions(before, after)
+    verdict = classify_smart(after, deltas, regressions)
+
+    # --- summary ----------------------------------------------------------
+    peak = max(temps) if temps else None
+    logger.log("== summary ==")
+    logger.log(f"write/verify : {verify.describe()}")
+    logger.log(f"peak temp    : {peak} C")
+    logger.log(f"SMART diff   : {describe_verdict(verdict)}")
+    for d in deltas:
+        logger.log(f"   {d.field}: {d.before} -> {d.after}")
+    for r in regressions:
+        logger.log(f"   {r}")
+    logger.log(f"full logs    : {log_dir}/")
+    logger.log("")
+
+    if dev_gone or verify.needs_attention or verdict is not SmartVerdict.CLEAN or read_error:
+        if dev_gone:
+            logger.log("RESULT: INCOMPLETE - device disconnected mid-run (likely thermal). "
+                       "Cool it, replug, and resume with --only.")
+        elif verify.status is VerifyStatus.OVERHEAT:
+            logger.log("RESULT: INCOMPLETE - stopped on temperature ceiling; "
+                       "use more --parts (and/or a fan).")
+        elif read_error:
+            logger.log("RESULT: ATTENTION NEEDED - a read benchmark hit an IO error "
+                       "(possible unreadable sectors); inspect the logs above.")
+        else:
+            logger.log("RESULT: ATTENTION NEEDED - inspect the logs above.")
+        return EXIT_ATTENTION
+
+    logger.log("RESULT: OK")
+    return EXIT_OK
+
+
+def _read_benchmarks(runner: Runner, dev: Device, logger: Logger, log_dir: Path) -> bool:
+    """Run the read benchmarks. Returns True if any job reported a read IO error
+    (e.g. unreadable sectors), so the caller can raise the overall verdict to
+    "needs attention" rather than let a bad read pass silently.
+    """
+    read_error = False
     for kind in ReadKind:
         logger.log(f">> {kind.label}")
         result = runner.run(build_read_argv(dev.path, kind))
         (log_dir / f"fio_{kind.value}.json").write_text(result.stdout)
         try:
             stats = parse_read_json(result.json(), kind)
+        except FioReadError as exc:
+            # A real read failure, not unparseable output: surface it and flag
+            # the run, don't bury it as "could not parse".
+            logger.log(f"   !! read error: {exc} - possible unreadable sectors")
+            read_error = True
+            continue
         except ValueError:
             logger.log("   (could not parse fio output)")
             continue
@@ -393,6 +444,7 @@ def _read_benchmarks(runner: Runner, dev: Device, logger: Logger, log_dir: Path)
         else:
             logger.log(f"   IOPS: {stats.iops:.0f} ({stats.bw_mb:.0f} MB/s)")
     logger.log("")
+    return read_error
 
 
 def _health_str(info: SmartInfo) -> str:

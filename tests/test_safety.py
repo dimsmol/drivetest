@@ -279,6 +279,51 @@ def test_force_does_not_bypass_system_disk_guard():
     assert "not-system-disk" in failures
 
 
+def test_force_does_not_bypass_serial_guard():
+    # force downgrades only the blank check; a duplicate serial (an ambiguous or
+    # wrong node) must keep blocking, as the docstring promises.
+    dev = _disk(serial="DUP")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=BlankProbe(signatures=("ext4",)),
+        all_serials=["DUP", "DUP"],
+        force=True,
+    )
+    failures = {c.name for c in blocking_failures(checks)}
+    assert "unique-serial" in failures
+
+
+def test_force_does_not_downgrade_blank_when_a_holder_is_present():
+    # A live kernel holder (assembled md array / open LUKS / active LVM PV) means
+    # the disk is in use right now. The mount guard won't catch an unmounted
+    # holder, so - unlike a passive signature - force must NOT wave it past.
+    dev = _disk(serial="UNIQUE")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=BlankProbe(holders=("dm-0",)),  # non-blank due to an active holder
+        all_serials=["UNIQUE"],
+        force=True,
+    )
+    failures = {c.name for c in blocking_failures(checks)}
+    assert "blank" in failures
+
+
+def test_force_still_downgrades_blank_for_a_passive_signature():
+    # The counterpart: a purely passive on-disk signature (no holder, no probe
+    # error) is exactly what force is for, so blank is downgraded and clears.
+    dev = _disk(serial="UNIQUE")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=BlankProbe(signatures=("ext4",)),
+        all_serials=["UNIQUE"],
+        force=True,
+    )
+    assert "blank" not in {c.name for c in blocking_failures(checks)}
+
+
 def test_force_does_not_bypass_mount_guard():
     # A genuinely mounted disk (real lsblk fixture with children on / and /boot)
     # must stay blocked even under --force.

@@ -30,8 +30,9 @@ def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str = "/sys/bl
         # A real whole disk always has a .../holders dir (empty when unused). If
         # it - or the device's /sys entry - is missing, /sys is not in the state
         # we expect: fail closed rather than read the absence as "no holders".
-        if not os.path.isdir(dev_sys):
-            probe_error = True
+        # (Either the device's /sys entry or the holders/ subdir being absent
+        # raises FileNotFoundError; both are unexpected, so both fail closed.)
+        probe_error = True
     except OSError:
         holders = ()
         probe_error = True

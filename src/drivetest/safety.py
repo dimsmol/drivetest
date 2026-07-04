@@ -199,10 +199,18 @@ def evaluate_write_safety(
     the live system disk. ``force`` never bypasses the mount, system-disk,
     whole-disk or serial guards.
 
-    ``force`` also never downgrades a blank check that failed because a probe
-    *could not run* (``probe_error``): force overrides data we positively read
-    (signatures/partitions/holders), not a state we failed to read at all - an
-    unreadable holder probe could hide an active-but-unmounted LVM/RAID member.
+    ``force`` downgrades a non-blank disk only when the disk is non-blank because
+    of *passive on-disk data* we positively read - a filesystem/partition-table
+    signature or a partition table (``children``). It never downgrades blank when:
+
+    - a probe *could not run* (``probe_error``): an unreadable holder probe could
+      hide an active-but-unmounted LVM/RAID member, and force overrides data we
+      read, not a state we failed to read at all; or
+    - the disk has a live kernel *holder* (``holders``): an assembled md array,
+      an open LUKS mapping or an LVM PV with active LVs is in use right now. The
+      mount guard won't catch an unmounted holder, and a confirmed holder is
+      stronger evidence of active use than an unreadable probe - so it, too, is
+      not something ``--force`` may wave past.
     """
     checks = [
         check_whole_disk(dev),
@@ -211,7 +219,7 @@ def evaluate_write_safety(
         check_serial_unique(dev, all_serials),
         check_blank(dev, probe),
     ]
-    if force and _root_established(root) and not probe.probe_error:
+    if force and _root_established(root) and not probe.probe_error and not probe.holders:
         checks = [
             Check(c.name, True, f"{c.detail} (forced)") if c.name == "blank" and not c.ok else c
             for c in checks

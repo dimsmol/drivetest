@@ -178,4 +178,8 @@ def format_gib(num_bytes: int) -> str:
     # small device, or with many --parts) never misleadingly prints as "0GiB".
     if gib >= 10 or gib == int(gib):
         return f"{gib:.0f}GiB"
+    # A nonzero span below ~0.05 GiB would round to "0.0GiB" at one decimal; show
+    # it as "<0.1GiB" so a real region never reads as zero.
+    if 0 < gib < 0.05:
+        return "<0.1GiB"
     return f"{gib:.1f}GiB"

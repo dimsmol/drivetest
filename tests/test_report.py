@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import replace
 
 from drivetest.report import (
@@ -202,6 +203,15 @@ def test_format_gib():
     assert format_gib(GIB + GIB // 2) == "1.5GiB"
 
 
+def test_format_gib_tiny_nonzero_is_not_shown_as_zero():
+    # A region far below 0.1 GiB (small device, many --parts) would round to
+    # "0.0GiB" at one decimal; it must read as "<0.1GiB", never as zero.
+    assert format_gib(1 * MIB) == "<0.1GiB"
+    assert format_gib(40 * MIB) == "<0.1GiB"
+    # just above the threshold still renders a real decimal, not "<0.1GiB"
+    assert format_gib(80 * MIB) == "0.1GiB"
+
+
 def test_logger_tees_to_file(tmp_path, capsys):
     summary = tmp_path / "summary.log"
     logger = Logger(summary)
@@ -209,3 +219,15 @@ def test_logger_tees_to_file(tmp_path, capsys):
     logger.log("world")
     assert summary.read_text() == "hello\nworld\n"
     assert capsys.readouterr().out == "hello\nworld\n"
+
+
+def test_logger_tees_to_explicit_stream(tmp_path):
+    # With an explicit stream (the branch the orchestrator uses), output goes to
+    # that stream and the file, not to stdout.
+    summary = tmp_path / "summary.log"
+    stream = io.StringIO()
+    logger = Logger(summary, stream=stream)
+    logger.log("hello")
+    logger.log("world")
+    assert summary.read_text() == "hello\nworld\n"
+    assert stream.getvalue() == "hello\nworld\n"
