@@ -35,6 +35,8 @@ def test_regions_are_mib_aligned_except_final_remainder():
         assert region.size % MIB == 0
     # the final region's size absorbs the sub-MiB remainder
     assert regions[-1].offset % MIB == 0
+    assert regions[-1].size % MIB != 0  # it actually holds the sub-MiB tail
+    assert regions[-1].end == dev  # ...up to the exact device size
 
 
 def test_single_part_covers_whole_device():

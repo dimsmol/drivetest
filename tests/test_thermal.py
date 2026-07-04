@@ -35,6 +35,13 @@ def test_thermal_policy_rejects_nonpositive_interval():
         replace(POLICY, cool_interval_s=0)
 
 
+def test_thermal_policy_rejects_nonpositive_poll_interval():
+    with pytest.raises(ValueError):
+        replace(POLICY, poll_interval_s=0)
+    with pytest.raises(ValueError):
+        replace(POLICY, poll_interval_s=-1)
+
+
 def test_thermal_policy_rejects_nonpositive_max_wait():
     with pytest.raises(ValueError):
         replace(POLICY, cool_max_wait_s=0)
@@ -93,6 +100,18 @@ def test_cooldown_pauses_once_when_unreadable():
     assert outcome.waited_s == POLICY.cool_interval_s
 
 
+def test_cooldown_unreadable_after_progress_counts_prior_wait():
+    # Hot first (one interval slept while cooling), then unreadable: the reported
+    # wait includes both the hot interval and the unreadable pause, no under-report.
+    policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=100, cool_interval_s=20)
+    ctrl, slept = _controller([HOT, None], policy)
+    outcome = ctrl.cooldown()
+    assert outcome.unreadable
+    assert not outcome.reached_target
+    assert outcome.waited_s == 40
+    assert slept == [20, 20]
+
+
 def test_cooldown_gives_up_after_max_wait():
     # never cools; capped by cool_max_wait_s / cool_interval_s iterations
     policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=60, cool_interval_s=20)
@@ -122,6 +141,14 @@ def test_prestart_cools_then_proceeds():
     # starts hot, cools to COOL, then a final COOL sample -> can start
     ctrl, _ = _controller([HOT, HOT, COOL, COOL])
     assert ctrl.prestart_ok()
+
+
+def test_prestart_proceeds_on_unknown_temperature():
+    # Unknown temperature -> proceed without cooling (like the shell script); the
+    # controller must not sleep or block on an unreadable sensor.
+    ctrl, slept = _controller([None])
+    assert ctrl.prestart_ok()
+    assert slept == []
 
 
 def test_prestart_refuses_when_still_hot_after_cooldown():

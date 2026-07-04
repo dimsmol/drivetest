@@ -78,6 +78,30 @@ def test_all_serials_skips_empty():
     assert "S3ZHNF0KC28756" in serials
 
 
+def test_partition_node_is_not_a_disk():
+    # A partition must be distinguishable from a whole disk: the write guard keys
+    # off is_disk, and a partition silently treated as a disk would be dangerous.
+    [part] = parse_lsblk(
+        {"blockdevices": [{"name": "sda1", "path": "/dev/sda1", "type": "part", "size": 100}]}
+    )
+    assert not part.is_disk
+    assert part.type == "part"
+
+
+def test_find_device_resolves_symlink_before_querying_lsblk(fake_runner: FakeRunner, tmp_path):
+    # find_device must canonicalize a by-id/by-path symlink to the real node
+    # before asking lsblk, so a symlinked target can't dodge later path checks.
+    real = tmp_path / "nvme0n1"
+    real.write_text("")
+    link = tmp_path / "by-id-link"
+    link.symlink_to(real)
+    fake_runner.add("lsblk", stdout=load_text("lsblk_usb_sda.json"))
+    find_device(fake_runner, str(link))
+    queried = fake_runner.calls[-1].argv
+    assert str(real) in queried  # lsblk saw the resolved node...
+    assert str(link) not in queried  # ...not the symlink
+
+
 # --- malformed / edge lsblk output ----------------------------------------
 
 def test_parse_lsblk_rejects_non_object():

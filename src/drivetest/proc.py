@@ -94,6 +94,10 @@ class SubprocessRunner:
         input: str | None = None,
         timeout: float | None = None,
     ) -> Result:
+        # An empty argv would raise a bare IndexError from Popen, bypassing this
+        # module's error types; keep the "callers never see raw subprocess" contract.
+        if not argv:
+            raise ToolNotFound(argv)
         try:
             proc = subprocess.run(
                 list(argv),

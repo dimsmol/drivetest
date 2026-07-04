@@ -135,6 +135,22 @@ def test_nvme_critical_warning_raised_is_a_regression():
     assert classify_smart(after, [], regressions) is SmartVerdict.CHANGED
 
 
+def test_critical_warning_raised_from_unknown_baseline_is_a_regression():
+    # An unknown baseline (None) with a post-run warning is still a regression -
+    # the `before.critical_warning or 0` default must treat None as 0, not skip it.
+    before = replace(HEALTHY, critical_warning=None)
+    after = replace(HEALTHY, critical_warning=4)
+    regressions = health_regressions(before, after)
+    assert regressions and "critical warning" in regressions[0]
+
+
+def test_critical_warning_cleared_is_not_a_regression():
+    # A warning going away (4 -> 0) is not a new problem introduced by this run.
+    before = replace(HEALTHY, critical_warning=4)
+    after = replace(HEALTHY, critical_warning=0)
+    assert health_regressions(before, after) == []
+
+
 def test_stable_health_flags_are_not_a_regression():
     # Health still PASSED and a pre-existing (unchanged) critical warning are not
     # new regressions introduced by this run.
@@ -165,6 +181,8 @@ def test_verify_outcome_needs_attention():
 def test_verify_outcome_describe():
     assert VerifyOutcome(VerifyStatus.PASS).describe() == "PASS"
     assert VerifyOutcome(VerifyStatus.SKIPPED).describe() == "skipped"
+    assert VerifyOutcome(VerifyStatus.FAIL).describe() == "FAIL"
+    assert VerifyOutcome(VerifyStatus.OVERHEAT).describe() == "OVERHEAT"
     partial = VerifyOutcome(VerifyStatus.PASS, detail="parts 1-4 of 8")
     assert partial.describe() == "PASS (parts 1-4 of 8 - not the whole drive)"
 

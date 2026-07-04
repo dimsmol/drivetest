@@ -371,6 +371,53 @@ def test_write_only_subset_runs_selected_parts_and_flags_partial(tmp_path):
     assert "skipped (not selected)" in summary
 
 
+def test_write_quick_mode_runs_a_single_region(tmp_path):
+    # --quick writes one leading region, not the whole drive in parts.
+    runner = _write_runner()
+    launched = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: launched.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True, quick=True), ctx)
+    assert code == EXIT_OK
+    assert len(launched) == 1
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "quick" in summary
+    assert "write/verify : PASS" in summary
+
+
+def test_write_aborts_when_device_mounted_at_recheck(tmp_path):
+    # Same device (identity stable) but mounted by the pre-write re-check: abort on
+    # the mount guard, and fio must never launch.
+    original = load_text("lsblk_usb_sda.json")
+    mounted = json.dumps(
+        {"blockdevices": [
+            {**json.loads(original)["blockdevices"][0], "mountpoints": ["/mnt/data"]}
+        ]}
+    )
+    # -Jb calls: find_device, list_devices, then the mounted re-check.
+    runner = _LsblkSequenceRunner([original, original, mounted])
+    runner.add("lsblk", contains=["-nrso"], stdout="nvme0n1p4\nnvme0n1\n")
+    runner.add("findmnt", stdout='{"filesystems": [{"source": "/dev/nvme0n1p4", "target": "/"}]}')
+    runner.add("wipefs", stdout='{"signatures": []}')
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    popen_calls = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: popen_calls.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_REFUSED
+    assert popen_calls == []  # never started a write
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "is mounted at" in summary
+
+
 def test_write_reports_disconnect_when_device_vanishes(tmp_path):
     # The device drops off the bus after the write (a thermal disconnect on a
     # passive enclosure): read benchmarks and post-SMART are skipped and the run

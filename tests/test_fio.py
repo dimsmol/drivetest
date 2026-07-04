@@ -203,6 +203,22 @@ def test_run_region_terminates_fio_if_monitor_errors(tmp_path):
     assert proc.terminated
 
 
+def test_run_region_returns_overheat_when_monitor_kills_on_ceiling(tmp_path):
+    # End-to-end: a ceiling temperature makes the monitor kill fio and the region
+    # is classified OVERHEAT - the run_region wiring, not just the isolated monitor.
+    proc = _FakeProc(returncode=143)  # SIGTERM-ish; classify ignores it on overheat
+    runner = FioRunner(
+        read_temp=lambda: POLICY.ceiling_c,
+        policy=POLICY,
+        sleep=lambda _s: None,
+        popen=lambda _argv: proc,  # type: ignore[arg-type,return-value]
+        echo=lambda _line: None,
+    )
+    result = runner.run_region("/dev/sdx", Region(1, 0, 1024), tmp_path / "f.log")
+    assert result is RegionResult.OVERHEAT
+    assert proc.terminated
+
+
 def test_run_region_drains_all_output_before_closing_log_on_error(tmp_path):
     # Even when the monitor errors, the drain thread is joined before the log
     # file closes, so all streamed output lands and none is lost to a closed sink.

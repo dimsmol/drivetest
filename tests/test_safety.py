@@ -53,6 +53,15 @@ def test_mounted_child_is_rejected():
     assert "/" in check.detail
 
 
+def test_directly_mounted_whole_disk_is_rejected():
+    # A mountpoint on the whole disk itself (no partitions) must be caught too,
+    # not just a mounted child - all_mountpoints walks the device itself first.
+    dev = _disk(mountpoints=("/mnt/data",))
+    check = check_not_mounted(dev)
+    assert not check.ok
+    assert "/mnt/data" in check.detail
+
+
 def test_unmounted_disk_accepted():
     [usb] = parse_lsblk(load_text("lsblk_usb_sda.json"))
     assert check_not_mounted(usb).ok

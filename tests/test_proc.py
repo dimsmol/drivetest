@@ -58,6 +58,31 @@ def test_nonzero_exit_is_captured_not_raised():
     assert result.stdout == "hi"
 
 
+def test_empty_argv_raises_tool_not_found():
+    # An empty argv would otherwise surface a bare IndexError from Popen; keep the
+    # contract that callers only ever see this module's error types.
+    with pytest.raises(ToolNotFound):
+        SubprocessRunner().run([])
+
+
+def test_stderr_is_captured():
+    result = SubprocessRunner().run(
+        [sys.executable, "-c", "import sys; sys.stderr.write('warn'); sys.exit(0)"]
+    )
+    assert result.ok
+    assert result.stderr == "warn"
+
+
+def test_undecodable_output_is_replaced_not_raised():
+    # Non-UTF-8 bytes (a tool's stray error text) must decode with replacement
+    # rather than crash the run - the deliberate errors="replace" choice.
+    result = SubprocessRunner().run(
+        [sys.executable, "-c", r"import sys; sys.stdout.buffer.write(b'\xff\xfe')"]
+    )
+    assert result.ok
+    assert "\ufffd" in result.stdout  # the Unicode replacement character
+
+
 # --- run_json -------------------------------------------------------------
 
 def test_run_json_tolerates_nonzero_exit_with_valid_json():
