@@ -1,11 +1,15 @@
 """A thin, mockable seam around subprocess.
 
-Every external command in the package goes through a :class:`Runner`. Production
-code uses :class:`SubprocessRunner`; tests inject a fake runner that maps an
-argv to a canned :class:`Result`, so no real command ever runs under test.
+Every external *query* command in the package goes through a :class:`Runner`.
+Production code uses :class:`SubprocessRunner`; tests inject a fake runner that
+maps an argv to a canned :class:`Result`, so no real command ever runs under
+test. (The long-lived write+verify ``fio`` process is the deliberate exception:
+:mod:`drivetest.fio` drives it via ``Popen`` so it can stream output and be
+killed at the thermal ceiling.)
 
-Keeping this the *single* place that touches ``subprocess`` is what makes the
-rest of the package unit-testable.
+Failures are translated to this module's own error types (:class:`ToolNotFound`,
+:class:`ProcTimeout`, :class:`ProcError`), so callers never have to import
+``subprocess`` to handle them.
 """
 
 from __future__ import annotations
@@ -24,6 +28,24 @@ class ProcError(RuntimeError):
         self.result = result
         cmd = " ".join(result.argv)
         super().__init__(f"command failed ({result.returncode}): {cmd}\n{result.stderr.strip()}")
+
+
+class ToolNotFound(RuntimeError):
+    """The external command's executable was not found on PATH."""
+
+    def __init__(self, argv: Sequence[str]) -> None:
+        self.argv = tuple(argv)
+        name = self.argv[0] if self.argv else "?"
+        super().__init__(f"command not found: {name} (is the tool installed and on PATH?)")
+
+
+class ProcTimeout(RuntimeError):
+    """A command did not finish within its timeout."""
+
+    def __init__(self, argv: Sequence[str], timeout: float | None) -> None:
+        self.argv = tuple(argv)
+        self.timeout = timeout
+        super().__init__(f"command timed out after {timeout}s: {' '.join(self.argv)}")
 
 
 @dataclass(frozen=True)
@@ -72,14 +94,24 @@ class SubprocessRunner:
         input: str | None = None,
         timeout: float | None = None,
     ) -> Result:
-        proc = subprocess.run(
-            list(argv),
-            input=input,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                list(argv),
+                input=input,
+                capture_output=True,
+                text=True,
+                # Pin UTF-8 (not the locale encoding, which under a C/POSIX root
+                # shell could raise on non-ASCII output); replace undecodable
+                # bytes rather than crash on a tool's stray error text.
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise ToolNotFound(argv) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ProcTimeout(argv, timeout) from exc
         return Result(
             argv=tuple(argv),
             returncode=proc.returncode,
@@ -93,7 +125,14 @@ def run_json(runner: Runner, argv: Sequence[str], *, timeout: float | None = Non
 
     Tolerates a non-zero exit as long as valid JSON was produced: several of our
     tools (notably ``smartctl``) set diagnostic bits in their exit status while
-    still printing a complete JSON report.
+    still printing a complete JSON report. If the command both failed *and*
+    produced no valid JSON, raises :class:`ProcError` (argv + stderr) rather than
+    an opaque ``JSONDecodeError``.
     """
     result = runner.run(argv, timeout=timeout)
-    return result.json()
+    try:
+        return result.json()
+    except json.JSONDecodeError:
+        if not result.ok:
+            raise ProcError(result) from None
+        raise
