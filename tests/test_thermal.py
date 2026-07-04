@@ -34,6 +34,11 @@ def test_thermal_policy_rejects_nonpositive_interval():
     with pytest.raises(ValueError):
         replace(POLICY, cool_interval_s=0)
 
+
+def test_thermal_policy_rejects_nonpositive_max_wait():
+    with pytest.raises(ValueError):
+        replace(POLICY, cool_max_wait_s=0)
+
 # Sample temps relative to the policy so these scenarios track threshold changes:
 # HOT is above both gates (needs cooling, cannot start), COOL is below both.
 HOT = max(POLICY.cool_target_c, POLICY.start_max_c) + 20

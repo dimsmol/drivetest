@@ -51,8 +51,10 @@ class ThermalPolicy:
         # cool_interval_s would never advance the wait and could spin forever).
         if self.poll_interval_s <= 0 or self.cool_interval_s <= 0:
             raise ValueError("thermal poll/cool intervals must be positive")
-        if self.cool_max_wait_s < 0:
-            raise ValueError("cool_max_wait_s must be non-negative")
+        # Must be positive: a zero cap would skip the cooldown loop entirely and
+        # return a nonsensical outcome (no sample taken, yet not "unreadable").
+        if self.cool_max_wait_s <= 0:
+            raise ValueError("cool_max_wait_s must be positive")
 
 
 def exceeds_ceiling(temp: Temp, policy: ThermalPolicy) -> bool:

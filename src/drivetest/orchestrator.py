@@ -136,7 +136,7 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     # --- temperature source shared by thermal + fio monitor --------------
     temps: list[int] = []
 
-    def read_temp():
+    def read_temp() -> int | None:
         t = smart.read_temperature(runner, dev.path, mode)
         if t is not None:
             temps.append(t)
@@ -359,7 +359,9 @@ def _device_present(runner: Runner, dev: Device) -> bool:
 def _smart_snapshot(runner: Runner, dev: Device, mode: list[str], text_path: Path) -> SmartInfo:
     """Save the raw ``smartctl -x`` text and return a parsed snapshot."""
     text = runner.run(["smartctl", "-x", *mode, dev.path])
-    text_path.write_text(text.stdout or text.stderr)
+    # Capture both streams so a diagnostic on stderr (e.g. on a failing read) is
+    # never lost; stdout carries the report, stderr is usually empty.
+    text_path.write_text(text.stdout + text.stderr)
     return smart.read_smart(runner, dev.path, mode)
 
 

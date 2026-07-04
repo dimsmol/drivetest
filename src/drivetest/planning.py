@@ -34,6 +34,11 @@ def plan_regions(dev_bytes: int, parts: int) -> list[Region]:
     Each non-final region is ``dev_bytes // parts`` rounded *down* to a whole
     MiB (fio's block size), and the final region absorbs the remainder so the
     regions exactly tile the device with no gap or overlap.
+
+    The final region's size may therefore not be a whole MiB. That is fine: both
+    ``dev_bytes`` (a device size) and every MiB-aligned offset are multiples of
+    the sector size, so the remainder is sector-aligned - fio writes full 1 MiB
+    blocks and a final short, still-sector-aligned block, valid under ``--direct``.
     """
     if parts < 1:
         raise ValueError(f"parts must be >= 1, got {parts}")

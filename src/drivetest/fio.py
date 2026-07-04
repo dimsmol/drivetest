@@ -221,11 +221,13 @@ def default_popen(argv: list[str]) -> subprocess.Popen[str]:
 
 
 class FioRunner:
-    """Runs fio for write+verify regions and read benchmarks.
+    """Runs fio write+verify regions (the streamed, temperature-monitored pass).
 
-    Effects are injected for testability: ``popen`` creates the process,
-    ``read_temp``/``sleep`` drive the monitor, and ``echo`` receives streamed
-    output lines (default: print to stdout).
+    Read benchmarks don't need this machinery - they run via a plain
+    :class:`~drivetest.proc.Runner` and :func:`parse_read_json` - so this class is
+    only the write path. Effects are injected for testability: ``popen`` creates
+    the process, ``read_temp``/``sleep`` drive the monitor, and ``echo`` receives
+    streamed output lines (default: print to stdout).
     """
 
     def __init__(
@@ -236,7 +238,6 @@ class FioRunner:
         sleep: Callable[[float], None] = time.sleep,
         popen: PopenFactory = default_popen,
         echo: Callable[[str], None] | None = None,
-        run_json: Callable[[list[str]], dict[str, Any]] | None = None,
         on_sample: Callable[[Temp], None] | None = None,
     ) -> None:
         self._read_temp = read_temp
@@ -244,7 +245,6 @@ class FioRunner:
         self._sleep = sleep
         self._popen = popen
         self._echo = echo or _print_line
-        self._run_json = run_json
         self._on_sample = on_sample
 
     def run_region(self, dev_path: str, region: Region, log_path: Path) -> RegionResult:
@@ -295,10 +295,3 @@ class FioRunner:
             proc.wait(timeout=TERMINATE_GRACE_S)
         except subprocess.TimeoutExpired:
             proc.kill()
-
-    def run_read(self, dev_path: str, kind: ReadKind) -> ReadStats:
-        """Run a read benchmark and return parsed bandwidth/IOPS."""
-        if self._run_json is None:
-            raise RuntimeError("FioRunner needs run_json to run read benchmarks")
-        obj = self._run_json(build_read_argv(dev_path, kind))
-        return parse_read_json(obj, kind)
