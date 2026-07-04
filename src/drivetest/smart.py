@@ -28,9 +28,15 @@ ACCESS_MODES: tuple[tuple[str, ...], ...] = (
 )
 
 # Temperature handling. A reading outside this window is treated as garbage from
-# a flaky bridge rather than a real temperature.
-MIN_PLAUSIBLE_TEMP_C = 15
+# a flaky bridge rather than a real temperature. The floor is the coldest a drive
+# under active test could plausibly be (a cold room), not a physical limit: a
+# rejected reading and a genuine low one drive the pacing loops identically (both
+# count as "proceed"), so the floor only decides whether a cold reading is shown
+# or dropped - it is deliberately low to avoid discarding a legitimately cool drive.
+MIN_PLAUSIBLE_TEMP_C = 5
 MAX_PLAUSIBLE_TEMP_C = 110
+# Rounded from 273.15; the ~0.15 C bias is well under the integer rounding of the
+# result, so it makes no practical difference to a whole-degree temperature.
 KELVIN_OFFSET = 273
 # No drive runs this hot in Celsius, so a value above it must be Kelvin.
 CELSIUS_KELVIN_THRESHOLD = 200
