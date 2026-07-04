@@ -1,60 +1,56 @@
-# Drive testing
+# drivetest
 
-Test a new **WD SN850X 2TB** SSD and **Asus ROG Strix Arion** USB-C enclosure before the SN850X replaces the system drive in the Dell XPS 13 9380.
+> **Authorship / disclaimer.** Most of the code in this project was produced by Claude Code (Anthropic's agentic coding CLI), using the Claude Opus 4.8 (1M context) model, working iteratively with the author. Considerable effort went into keeping the quality reasonable - comprehensive unit and integration tests over real-hardware JSON fixtures, strict type checking (`pyright`), linting (`ruff`), an enforced layered architecture (`import-linter`), and several review passes. Even so, this tool performs **destructive disk writes**. It has not been independently audited; independent review is welcome and strongly advised before relying on it.
 
-The enclosure caps at ~1 GB/s (USB 3.2 Gen 2), so test in two stages: integrity/health externally now, real NVMe speed + the M.2 slot internally at swap time. The drive is new/empty, so destructive write tests are fine.
-
-`drivetest` runs the battery: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder. It works for a drive in a USB enclosure (`/dev/sdX`) and for an NVMe drive in the M.2 slot (`/dev/nvmeXn1`).
+`drivetest` runs a health-and-integrity battery against a storage device: SMART baseline -> optional full write+verify (crc32c) -> read benchmarks -> SMART diff -> pass/fail. Logs go to a timestamped folder. It works for a drive in a USB enclosure (`/dev/sdX`) and for an NVMe drive in an M.2 slot (`/dev/nvmeXn1`).
 
 The tool is a small dependency-free Python package (`src/drivetest/`, run via the `./drivetest` wrapper). It shells out to `fio`, `smartctl`, `nvme`, `lsblk`, `wipefs` and `findmnt`, parsing their JSON output. Stdlib-only on purpose, so it runs from a minimal live USB. See [Development](#development) for the layout and how to test it.
 
-## Stage 1 - external, via Arion enclosure
+For a worked end-to-end example - screening a new SSD in a passive USB enclosure, then validating it in an M.2 slot - see [doc/case_ssd_swap.md](doc/case_ssd_swap.md).
 
-1. Plug in. Identify the node (appears as `/dev/sdX`):
-   ```bash
-   lsblk -o NAME,SIZE,MODEL,TRAN,SERIAL
-   ```
-2. Confirm 10 Gbps link (want `SuperSpeedPlus` / `10000M`):
-   ```bash
-   sudo dmesg | grep -iE 'usb.*(SuperSpeed|10000|5000)' | tail
-   ```
-3. Full destructive write/verify + health (wipes the drive; ~1.5-2.5 h):
-   ```bash
-   sudo ./drivetest --write --parts 8 /dev/sdX
-   ```
-   Use `--quick` (first 50G) for a fast sanity pass first.
+## Usage
 
-Pass = write/verify PASS, SMART diff clean, temp stayed under ~70 C.
+Everything runs as root (SMART and raw device IO need it), so the commands below use `sudo`.
 
-**Passive enclosures overheat on a sustained full write.** A continuous 2 TB write in a fanless USB enclosure (e.g. the Arion) climbs steadily past the drive's ~75-80 C throttle point and the bridge eventually drops off the bus - which fails the test with no integrity result. Two mitigations, combine as needed:
+Identify the device node and confirm it is the right one:
+```bash
+lsblk -o NAME,SIZE,MODEL,TRAN,SERIAL
+```
 
-- `--parts N` splits the write+verify into N regions, cooling the drive to <= 50 C before each, so heat never accumulates. Start with `--parts 8` for a passive enclosure. Before each region it also refuses to start if the drive is still hot (> 55 C after cooling), and while a region runs it enforces a hard ceiling (78 C): if reached, fio is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
+Read-only health + read benchmarks (never writes):
+```bash
+sudo ./drivetest /dev/sdX
+```
+
+Destructive full write+verify (crc32c) then health + benchmarks (**wipes the drive**):
+```bash
+sudo ./drivetest --write /dev/sdX
+```
+
+Useful flags:
+
+- `--quick` - write+verify only the first 50 GiB, for a fast sanity pass.
+- `--parts N` - split the write+verify into N regions with a cooldown before each (see [Thermal pacing](#thermal-pacing-passive-enclosures)).
+- `--only SPEC` - run just some of the N parts (e.g. `--only 1-4`), to break and resume.
+- `--force` - override the blank-disk guard (see [Safety](#safety)); use only when certain.
+
+Pass = write/verify PASS, SMART diff clean, temperature stayed within limits.
+
+## Thermal pacing (passive enclosures)
+
+**Passive (fanless) enclosures overheat on a sustained full write.** A continuous multi-TB write in a fanless USB enclosure climbs steadily past the drive's ~75-80 C throttle point, and the USB bridge eventually drops off the bus - which fails the test with no integrity result. Two mitigations, combine as needed:
+
+- `--parts N` splits the write+verify into N regions, cooling the drive to <= 50 C before each, so heat never accumulates. Start around `--parts 8` for a passive enclosure. Before each region it also refuses to start if the drive is still hot (> 55 C after cooling), and while a region runs it enforces a hard ceiling (78 C): if reached, `fio` is stopped cleanly (result `INCOMPLETE`) rather than riding into a disconnect.
 - `--only SPEC` runs just some of the N parts, so you can break and resume without redoing everything. SPEC is a comma list of parts/ranges over the **same** `--parts N`, e.g. `--only 1-4` now and `--only 5-8` later (or `--only 6` to redo a single region). Always pass the same `--parts N` when resuming - region boundaries depend on it.
 - A **fan** on the enclosure is the real fix - even a cheap desk fan drops it several degrees and may let a single `--write` pass complete.
 
 Resuming across sessions: each `--only` run reports `PASS (parts X of N ...)` for just the parts it ran - the drive is fully verified only once every part has passed across your runs.
 
-Because of this thermal limit, the definitive full-speed write+verify is really Stage 2 (internal); the external pass mainly screens for a dead-on-arrival drive.
-
-## Stage 2 - internal, in the M.2 slot
-
-Do at swap time. Fit the SN850X, boot a **Linux live USB**, drive is `/dev/nvme0n1`:
-
-1. Native health + speed:
-   ```bash
-   sudo ./drivetest --write /dev/nvme0n1   # expect ~7000 MB/s seq read
-   ```
-2. Built-in extended self-test (USB bridges can't pass this through):
-   ```bash
-   sudo nvme device-self-test /dev/nvme0n1 -s 2
-   sudo nvme self-test-log /dev/nvme0n1
-   ```
-
-Confirms full performance and that the slot/contacts are good. Then clone/reinstall. **Keep the old drive untouched until Stage 2 passes.**
+The thermal thresholds (ceiling, cool-to target, start-max, max wait) are policy constants in the `thermal` module; tune them there for a different enclosure.
 
 ## Safety
 
-`--write` is destructive. The script refuses to touch the wrong disk through several independent guards:
+`--write` is destructive. The tool refuses to touch the wrong disk through several independent guards:
 
 - **One whole disk only** - a single `/dev` target, and it must be a whole disk, not a partition or dm/LVM/RAID/loop node (`TYPE != disk`).
 - **Not mounted** - refuses if the disk or any child is mounted or in use as swap. Fails closed: if the state can't be read, it refuses.
