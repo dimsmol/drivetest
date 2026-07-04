@@ -210,6 +210,36 @@ def test_force_does_not_downgrade_blank_when_root_walk_empty():
     assert "blank" in failures
 
 
+def test_force_does_not_downgrade_blank_when_probe_errored():
+    # A probe that could not run leaves the disk's in-use state unknown. --force
+    # overrides data we positively read (signatures/holders), not a state we
+    # failed to read, so an errored probe keeps the blank guard blocking.
+    dev = _disk(serial="UNIQUE")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=BlankProbe(probe_error=True),
+        all_serials=["UNIQUE"],
+        force=True,
+    )
+    failures = {c.name for c in blocking_failures(checks)}
+    assert "blank" in failures
+
+
+def test_force_clears_a_non_blank_but_otherwise_good_disk():
+    # The positive case: an established, unrelated root and a real signature (not a
+    # probe error). Force downgrades blank and nothing else blocks the write.
+    dev = _disk(serial="UNIQUE")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=BlankProbe(signatures=("ext4",)),
+        all_serials=["UNIQUE"],
+        force=True,
+    )
+    assert blocking_failures(checks) == []
+
+
 def test_empty_parent_disks_is_uncertain_not_clean():
     # A resolved root that names no disk cannot clear a target as "not the system
     # disk"; the guard must flag uncertainty rather than pass cleanly.

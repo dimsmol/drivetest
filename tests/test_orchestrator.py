@@ -43,17 +43,20 @@ def _no_missing_tools(monkeypatch):  # pyright: ignore[reportUnusedFunction]  # 
     monkeypatch.setattr("drivetest.orchestrator.missing_tools", lambda required: [])
 
 
-def _config(device, *, write=False, assume_yes=False, quick=False, force=False) -> RunConfig:
+def _config(
+    device, *, write=False, assume_yes=False, quick=False, force=False, parts=DEFAULT_PARTS,
+    only=None,
+) -> RunConfig:
     """A RunConfig for these tests, defaulting the knobs a run doesn't vary."""
     return RunConfig(
         device=device,
         write=write,
         quick=quick,
         force=force,
-        only=None,
+        only=only,
         assume_yes=assume_yes,
         log_dir=None,
-        parts=DEFAULT_PARTS,
+        parts=parts,
         quick_bytes=DEFAULT_QUICK_BYTES,
         policy=DEFAULT_THERMAL_POLICY,
     )
@@ -307,3 +310,88 @@ def test_write_aborts_when_identity_changes_before_write(tmp_path):
     assert popen_calls == []  # never started a write
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "identity changed" in summary
+
+
+def test_write_aborts_on_thermal_ceiling(tmp_path, monkeypatch):
+    # Too hot to start: the write phase must stop with OVERHEAT, never launch fio,
+    # and the run must exit ATTENTION with the ceiling explanation.
+    monkeypatch.setattr(
+        "drivetest.orchestrator.ThermalController.prestart_ok", lambda self: False
+    )
+    runner = _write_runner()
+    popen_calls = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: popen_calls.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_ATTENTION
+    assert popen_calls == []  # too hot -> fio never launched
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "temperature ceiling" in summary
+    assert "too hot to start" in summary
+
+
+def test_write_stops_after_a_failed_part_and_does_not_continue(tmp_path):
+    # A FAIL on part 2 of 3 must stop the run: part 3 never starts (no plowing on
+    # over a drive that just failed verify).
+    runner = _write_runner()
+    launched = []
+
+    def popen(argv):
+        launched.append(argv)
+        # The second launched part fails its verify (fio exits non-zero).
+        return _DoneProc(1 if len(launched) == 2 else 0)
+
+    ctx = _ctx(runner, tmp_path, popen=popen, sys_block=_sys_block_for(tmp_path))
+    code = run(_config("/dev/sda", write=True, assume_yes=True, parts=3), ctx)
+    assert code == EXIT_ATTENTION
+    assert len(launched) == 2  # parts 1-2 ran; part 3 never launched
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "stopping after part 2" in summary
+    assert "part 3/3" not in summary  # part 3 was never even announced
+
+
+def test_write_only_subset_runs_selected_parts_and_flags_partial(tmp_path):
+    # --only 2-3 of 4: only those parts run, and a clean pass is flagged partial
+    # ("not the whole drive") while still exiting OK.
+    runner = _write_runner()
+    launched = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: launched.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True, parts=4, only="2-3"), ctx)
+    assert code == EXIT_OK
+    assert len(launched) == 2  # parts 2 and 3 only
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "not the whole drive" in summary
+    assert "skipped (not selected)" in summary
+
+
+def test_write_reports_disconnect_when_device_vanishes(tmp_path):
+    # The device drops off the bus after the write (a thermal disconnect on a
+    # passive enclosure): read benchmarks and post-SMART are skipped and the run
+    # ends INCOMPLETE, not OK.
+    original = load_text("lsblk_usb_sda.json")
+    gone = '{"blockdevices": []}'
+    # -Jb calls: find_device, list_devices, pre-write re-check, post-write presence.
+    runner = _LsblkSequenceRunner([original, original, original, gone])
+    runner.add("lsblk", contains=["-nrso"], stdout="nvme0n1p4\nnvme0n1\n")
+    runner.add("findmnt", stdout='{"filesystems": [{"source": "/dev/nvme0n1p4", "target": "/"}]}')
+    runner.add("wipefs", stdout='{"signatures": []}')
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda _argv: _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_ATTENTION
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "disconnected mid-run" in summary
+    assert "is gone or changed identity" in summary

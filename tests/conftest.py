@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from drivetest.proc import Result
+from drivetest.proc import ProcTimeout, Result, ToolNotFound
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -58,10 +59,13 @@ class FakeRunner:
     registration order; an unmatched command raises, so tests never silently
     pass on an unexpected call.
 
-    Pass ``error=`` to make a matching rule raise instead of returning, to
-    exercise the failure paths the real runner produces (a missing tool ->
-    ``FileNotFoundError``, a timeout -> ``subprocess.TimeoutExpired``). Every
-    attempted call is recorded in :attr:`calls` (argv, input, timeout).
+    Pass ``error=`` to make a matching rule raise instead of returning. Like the
+    real :class:`drivetest.proc.SubprocessRunner`, a raw ``FileNotFoundError`` or
+    ``subprocess.TimeoutExpired`` is translated to ``ToolNotFound`` / ``ProcTimeout``
+    before it reaches the caller, so tests see exactly the exception types
+    production code sees (callers never handle the raw stdlib exceptions). Any
+    other ``error=`` is raised as-is. Every attempted call is recorded in
+    :attr:`calls` (argv, input, timeout).
     """
 
     rules: list[_Rule] = field(default_factory=list)
@@ -108,9 +112,22 @@ class FakeRunner:
         for rule in self.rules:
             if rule.matches(argv_list):
                 if rule.error is not None:
-                    raise rule.error
+                    raise self._translate(rule.error, argv_list, timeout)
                 return replace(rule.result, argv=tuple(argv_list))
         raise AssertionError(f"FakeRunner: no rule for {argv_list}")
+
+    @staticmethod
+    def _translate(
+        error: BaseException, argv: list[str], timeout: float | None
+    ) -> BaseException:
+        """Mirror SubprocessRunner's exception translation so the fake surfaces
+        the same error types production callers see.
+        """
+        if isinstance(error, FileNotFoundError):
+            return ToolNotFound(argv)
+        if isinstance(error, subprocess.TimeoutExpired):
+            return ProcTimeout(argv, timeout)
+        return error
 
 
 @pytest.fixture

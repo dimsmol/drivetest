@@ -171,6 +171,22 @@ def test_read_temperature_nvme_falls_back_to_smartctl_on_nvme_failure(fake_runne
     assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
 
 
+def test_read_temperature_ignores_nvme_substring_in_non_nvme_path(fake_runner: FakeRunner):
+    # A non-NVMe node whose path merely contains "nvme" (e.g. an enclosure dir)
+    # must not trigger an `nvme` call. Only a smartctl rule is registered, so a
+    # stray nvme call would raise from FakeRunner and fail the test.
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_ata.json"))
+    assert read_temperature(fake_runner, "/dev/nvme-enclosure/sdb", []) == 30
+
+
+def test_read_temperature_tolerates_missing_nvme_binary(fake_runner: FakeRunner):
+    # If the nvme binary is absent (ToolNotFound), fall back to smartctl rather
+    # than let the error propagate out of a best-effort temperature read.
+    fake_runner.add("nvme", contains=["smart-log"], error=FileNotFoundError("nvme"))
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
+
+
 def test_kelvin_or_celsius():
     assert _kelvin_or_celsius(SAMPLE_TEMP_C + KELVIN_OFFSET) == SAMPLE_TEMP_C  # kelvin in
     assert _kelvin_or_celsius(SAMPLE_TEMP_C) == SAMPLE_TEMP_C                   # already celsius

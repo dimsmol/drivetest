@@ -192,6 +192,11 @@ def evaluate_write_safety(
     remove it, or a forced write on e.g. a ZFS/overlay-root system could target
     the live system disk. ``force`` never bypasses the mount, system-disk,
     whole-disk or serial guards.
+
+    ``force`` also never downgrades a blank check that failed because a probe
+    *could not run* (``probe_error``): force overrides data we positively read
+    (signatures/partitions/holders), not a state we failed to read at all - an
+    unreadable holder probe could hide an active-but-unmounted LVM/RAID member.
     """
     checks = [
         check_whole_disk(dev),
@@ -200,7 +205,7 @@ def evaluate_write_safety(
         check_serial_unique(dev, all_serials),
         check_blank(dev, probe),
     ]
-    if force and _root_established(root):
+    if force and _root_established(root) and not probe.probe_error:
         checks = [
             Check(c.name, True, f"{c.detail} (forced)") if c.name == "blank" and not c.ok else c
             for c in checks

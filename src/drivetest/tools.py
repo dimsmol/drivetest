@@ -26,12 +26,12 @@ Which = Callable[[str], str | None]
 def required_tools(dev_path: str) -> list[str]:
     """The tools needed to test ``dev_path`` (adds ``nvme`` for NVMe targets)."""
     tools = list(BASE_TOOLS)
-    if _is_nvme_target(dev_path):
+    if is_nvme_target(dev_path):
         tools.append("nvme")
     return tools
 
 
-def _is_nvme_target(dev_path: str) -> bool:
+def is_nvme_target(dev_path: str) -> bool:
     """True for an NVMe device node.
 
     Resolves a ``by-id``/``by-path`` symlink to the real node first, then matches

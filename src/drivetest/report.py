@@ -123,8 +123,15 @@ def health_regressions(before: SmartInfo, after: SmartInfo) -> list[str]:
     :func:`diff_smart` because these are a boolean and a bitmask, not counters.
     """
     reasons: list[str] = []
-    if before.health_passed is True and after.health_passed is False:
-        reasons.append("SMART self-assessment flipped PASSED -> FAILED")
+    if after.health_passed is False and before.health_passed is not False:
+        # A currently-FAILED self-assessment must feed the verdict even when the
+        # baseline is unknown (None) - e.g. a partial report or SATA-behind-USB
+        # where the pre-run report lacked smart_status. Only skip it if the drive
+        # was already FAILED before the run (no regression to report).
+        if before.health_passed is True:
+            reasons.append("SMART self-assessment flipped PASSED -> FAILED")
+        else:
+            reasons.append("SMART self-assessment reports FAILED")
     before_cw = before.critical_warning or 0
     after_cw = after.critical_warning
     if after_cw is not None and after_cw != 0 and after_cw != before_cw:

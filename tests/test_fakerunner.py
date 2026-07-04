@@ -6,7 +6,11 @@ simulating a failing tool) is worth guarding directly.
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
+
+from drivetest.proc import ProcTimeout, ToolNotFound
 
 from .conftest import Call, FakeRunner
 
@@ -19,14 +23,22 @@ def test_records_argv_input_and_timeout():
 
 
 def test_rule_can_raise_to_simulate_a_missing_tool():
-    # The real runner raises FileNotFoundError when a tool isn't installed; a
-    # rule can reproduce that so error handling becomes testable.
+    # A missing tool surfaces as ToolNotFound, exactly like the real runner: a
+    # raw FileNotFoundError is translated, so callers test the type they see.
     runner = FakeRunner()
     runner.add("nvme", contains=["smart-log"], error=FileNotFoundError("nvme"))
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ToolNotFound):
         runner.run(["nvme", "smart-log", "/dev/nvme0n1"])
     # the attempted call is still recorded
     assert runner.calls[-1].argv == ("nvme", "smart-log", "/dev/nvme0n1")
+
+
+def test_rule_can_raise_to_simulate_a_timeout():
+    # A raw TimeoutExpired is likewise translated to ProcTimeout.
+    runner = FakeRunner()
+    runner.add("fio", contains=["--name"], error=subprocess.TimeoutExpired("fio", 5.0))
+    with pytest.raises(ProcTimeout):
+        runner.run(["fio", "--name", "wr"], timeout=5.0)
 
 
 def test_rules_tried_in_registration_order():

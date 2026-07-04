@@ -90,6 +90,7 @@ Residual limits (inherent to any userspace tool): a disk with only a signature t
 
 - Always re-check the device node after plugging in; `--write` erases the target.
 - Long `fio` phases print a live progress line every 30s (percent + speed + ETA for the write pass; a time countdown for the read benchmarks). Full per-phase output is saved under the `drive_test_*` log folder.
+- Temperature is interpreted with two small heuristics in the `smart` module, since the tools don't fully label their output. nvme-cli reports the value with no unit, so a reading above 200 is taken to be Kelvin and converted to Celsius (no drive runs that hot in Celsius); and a reading outside a plausibility window (5-110 C) is treated as garbage from a flaky bridge and dropped rather than trusted. Neither is fatal: an unknown or dropped temperature makes the pacing loops proceed rather than block, so at worst a bad sample skips one pacing decision - it can't stall or wrongly fail a run.
 
 ## Development
 

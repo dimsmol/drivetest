@@ -108,6 +108,25 @@ def test_health_self_assessment_flip_is_a_regression():
     assert classify_smart(after, [], regressions) is SmartVerdict.CHANGED
 
 
+def test_failed_self_assessment_from_unknown_baseline_is_a_regression():
+    # A partial pre-run report (health_passed unknown - e.g. SATA-behind-USB where
+    # smart_status was absent) must not let a post-run FAILED assessment read as
+    # CLEAN just because there was no True -> False transition to compare against.
+    before = replace(HEALTHY, health_passed=None)
+    after = replace(HEALTHY, health_passed=False)
+    assert diff_smart(before, after) == []  # no counter moved
+    regressions = health_regressions(before, after)
+    assert regressions and "FAILED" in regressions[0]
+    assert classify_smart(after, [], regressions) is SmartVerdict.CHANGED
+
+
+def test_already_failed_before_run_is_not_a_new_regression():
+    # Already FAILED before we started -> no regression to attribute to this run.
+    before = replace(HEALTHY, health_passed=False)
+    after = replace(HEALTHY, health_passed=False)
+    assert health_regressions(before, after) == []
+
+
 def test_nvme_critical_warning_raised_is_a_regression():
     before = replace(HEALTHY, critical_warning=0)
     after = replace(HEALTHY, critical_warning=4)

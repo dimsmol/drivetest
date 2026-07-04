@@ -15,7 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .proc import Runner
+from .proc import Runner, ToolNotFound
+from .tools import is_nvme_target
 
 # smartctl ``-d`` argument sets to try, in order: bare/auto first, then the
 # common USB-NVMe bridge modes, then SAT for SATA-behind-USB.
@@ -204,9 +205,16 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     garbage from a flaky bridge.
     """
     temp: int | None = None
-    if "nvme" in dev_path:
-        result = runner.run(["nvme", "smart-log", dev_path, "-o", "json"])
-        if result.ok:
+    # Resolve symlinks and match the real node name (like required_tools), so we
+    # only reach for ``nvme`` on an actual NVMe device - a substring check would
+    # try it on a non-NVMe path that merely contains "nvme", where the binary may
+    # not even be installed.
+    if is_nvme_target(dev_path):
+        try:
+            result = runner.run(["nvme", "smart-log", dev_path, "-o", "json"])
+        except ToolNotFound:
+            result = None
+        if result is not None and result.ok:
             try:
                 payload: dict[str, Any] = result.json()
                 temp = _kelvin_or_celsius(payload.get("temperature"))

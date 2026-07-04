@@ -47,7 +47,9 @@ def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str = "/sys/bl
                 sig_obj: dict[str, Any] = sig or {}
                 found.append(str(sig_obj.get("type", "?")))
             signatures = tuple(found)
-        except ValueError:
+        # AttributeError/TypeError guard valid-but-non-object JSON (null, [], a
+        # bare number): .get would raise rather than JSONDecodeError. Fail closed.
+        except (ValueError, AttributeError, TypeError):
             probe_error = True
     else:
         probe_error = True
@@ -76,7 +78,8 @@ def gather_root_info(runner: Runner) -> RootInfo:
     try:
         data: dict[str, Any] = result.json()
         filesystems: list[Any] = data.get("filesystems") or []
-    except ValueError:
+    # AttributeError/TypeError guard valid-but-non-object JSON; fail closed.
+    except (ValueError, AttributeError, TypeError):
         return RootInfo(source=None, resolved=False)
     if not filesystems:
         return RootInfo(source=None, resolved=False)
