@@ -66,6 +66,13 @@ def test_disk_backing_root_is_rejected():
     assert not check_not_system_disk(dev, root).ok
 
 
+def test_system_disk_matched_by_path_when_name_differs():
+    # The name doesn't match a parent disk, but the /dev path does - still refuse.
+    dev = _disk(name="something-else", path="/dev/nvme0n1")
+    root = RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",))
+    assert not check_not_system_disk(dev, root).ok
+
+
 def test_disk_not_backing_root_accepted():
     dev = _disk(name="sda", path="/dev/sda")
     root = RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1p4", "nvme0n1"))
@@ -212,7 +219,7 @@ def test_empty_parent_disks_is_uncertain_not_clean():
     assert "cannot resolve" in check.detail  # ...flagged as uncertain, not "does not back /"
 
 
-def test_force_does_not_bypass_mount_or_system_guards():
+def test_force_does_not_bypass_system_disk_guard():
     dev = _disk(name="nvme0n1", path="/dev/nvme0n1", serial="UNIQUE")
     checks = evaluate_write_safety(
         dev,
@@ -223,6 +230,23 @@ def test_force_does_not_bypass_mount_or_system_guards():
     )
     failures = {c.name for c in blocking_failures(checks)}
     assert "not-system-disk" in failures
+
+
+def test_force_does_not_bypass_mount_guard():
+    # A genuinely mounted disk (real lsblk fixture with children on / and /boot)
+    # must stay blocked even under --force.
+    [nvme] = parse_lsblk(load_text("lsblk_nvme_system.json"))
+    assert nvme.serial is not None
+    checks = evaluate_write_safety(
+        nvme,
+        # An established, unrelated root so only the mount guard is at issue.
+        root=RootInfo(source="/dev/other", parent_disks=("other",)),
+        probe=BlankProbe(signatures=("ext4",)),
+        all_serials=[nvme.serial],
+        force=True,
+    )
+    failures = {c.name for c in blocking_failures(checks)}
+    assert "not-mounted" in failures
 
 
 def test_check_is_an_immutable_value_object():

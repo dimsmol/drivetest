@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from drivetest.smart import (
+    CELSIUS_KELVIN_THRESHOLD,
     KELVIN_OFFSET,
     MAX_PLAUSIBLE_TEMP_C,
+    MIN_PLAUSIBLE_TEMP_C,
     _kelvin_or_celsius,
     detect_access_mode,
     parse_smart_json,
@@ -36,12 +40,36 @@ def test_parse_nvme_report():
 def test_parse_ata_report_attributes():
     info = parse_smart_json(load_json("smart_ata.json"))
     assert info.model == "Samsung SSD 860 EVO 1TB"
+    assert info.health_passed is True
     assert info.temperature_c == 30
     assert info.reallocated_sectors == 0
     assert info.pending_sectors == 0
     assert info.uncorrectable_errors == 0
     assert info.crc_errors == 0
     assert info.power_on_hours == 4200
+
+
+def test_ata_attr_matches_by_name_when_id_differs():
+    # The id-or-name fallback: a row whose id doesn't match but whose name does.
+    obj = {
+        "model_name": "M",
+        "serial_number": "S",
+        "ata_smart_attributes": {
+            "table": [{"id": 999, "name": "Reallocated_Sector_Ct", "raw": {"value": 7}}]
+        },
+    }
+    assert parse_smart_json(obj).reallocated_sectors == 7
+
+
+def test_missing_fields_become_none():
+    # A bare report (model/serial only) has no counters/health - all None, not 0.
+    info = parse_smart_json({"model_name": "M", "serial_number": "S"})
+    assert info.has_report
+    assert info.health_passed is None  # no smart_status
+    assert info.media_errors is None
+    assert info.available_spare is None
+    assert info.critical_warning is None
+    assert info.reallocated_sectors is None  # no ata table
 
 
 def test_temperature_falls_back_to_nvme_log_when_no_top_level():
@@ -115,7 +143,44 @@ def test_read_temperature_rejects_out_of_range(fake_runner: FakeRunner):
     assert read_temperature(fake_runner, "/dev/nvme0n1", []) is None
 
 
+@pytest.mark.parametrize(
+    ("celsius", "accepted"),
+    [
+        (MIN_PLAUSIBLE_TEMP_C - 1, False),
+        (MIN_PLAUSIBLE_TEMP_C, True),
+        (MAX_PLAUSIBLE_TEMP_C, True),
+        (MAX_PLAUSIBLE_TEMP_C + 1, False),
+    ],
+)
+def test_read_temperature_plausibility_bounds(fake_runner: FakeRunner, celsius, accepted):
+    kelvin = celsius + KELVIN_OFFSET
+    fake_runner.add("nvme", contains=["smart-log"], stdout=f'{{"temperature": {kelvin}}}')
+    result = read_temperature(fake_runner, "/dev/nvme0n1", [])
+    assert result == (celsius if accepted else None)
+
+
+def test_read_temperature_falls_back_to_smartctl_for_non_nvme(fake_runner: FakeRunner):
+    # A non-NVMe node makes no nvme call; the temperature comes from smartctl.
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_ata.json"))
+    assert read_temperature(fake_runner, "/dev/sda", []) == 30
+
+
+def test_read_temperature_nvme_falls_back_to_smartctl_on_nvme_failure(fake_runner: FakeRunner):
+    fake_runner.add("nvme", contains=["smart-log"], returncode=1)
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
+
+
 def test_kelvin_or_celsius():
     assert _kelvin_or_celsius(SAMPLE_TEMP_C + KELVIN_OFFSET) == SAMPLE_TEMP_C  # kelvin in
     assert _kelvin_or_celsius(SAMPLE_TEMP_C) == SAMPLE_TEMP_C                   # already celsius
     assert _kelvin_or_celsius(None) is None
+
+
+def test_kelvin_threshold_boundary():
+    # At the threshold the value is read as Celsius; one above is read as Kelvin.
+    assert _kelvin_or_celsius(CELSIUS_KELVIN_THRESHOLD) == CELSIUS_KELVIN_THRESHOLD
+    assert (
+        _kelvin_or_celsius(CELSIUS_KELVIN_THRESHOLD + 1)
+        == CELSIUS_KELVIN_THRESHOLD + 1 - KELVIN_OFFSET
+    )

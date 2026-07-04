@@ -56,10 +56,45 @@ def test_crc_errors_worsening_flagged():
     assert classify_smart(after, deltas) is SmartVerdict.CHANGED
 
 
+def test_pending_sectors_worsening_flagged():
+    before = replace(HEALTHY, pending_sectors=0)
+    after = replace(HEALTHY, pending_sectors=3)
+    assert diff_smart(before, after)[0].field == "pending_sectors"
+
+
+def test_uncorrectable_errors_worsening_flagged():
+    before = replace(HEALTHY, uncorrectable_errors=0)
+    after = replace(HEALTHY, uncorrectable_errors=2)
+    assert diff_smart(before, after)[0].field == "uncorrectable_errors"
+
+
 def test_missing_counter_is_not_a_change():
     before = replace(HEALTHY, media_errors=None)
     after = replace(HEALTHY, media_errors=2)
     assert diff_smart(before, after) == []  # can't compare a missing baseline
+
+
+def test_counter_decrease_is_not_a_change():
+    # Only increases count as worsening; a lower reading (e.g. a reset) is ignored.
+    before = replace(HEALTHY, media_errors=5)
+    after = replace(HEALTHY, media_errors=2)
+    assert diff_smart(before, after) == []
+
+
+def test_multiple_counters_worsening_are_all_reported():
+    before = replace(HEALTHY, media_errors=0, crc_errors=0)
+    after = replace(HEALTHY, media_errors=1, crc_errors=2)
+    assert {d.field for d in diff_smart(before, after)} == {"media_errors", "crc_errors"}
+
+
+def test_changed_verdict_from_real_parsed_reports():
+    before = parse_smart_json(load_json("smart_nvme.json"))
+    after_obj = load_json("smart_nvme.json")
+    after_obj["nvme_smart_health_information_log"]["media_errors"] = 4
+    after = parse_smart_json(after_obj)
+    deltas = diff_smart(before, after)
+    assert deltas and deltas[0].field == "media_errors"
+    assert classify_smart(after, deltas) is SmartVerdict.CHANGED
 
 
 def test_health_self_assessment_flip_is_a_regression():
