@@ -66,6 +66,8 @@ def test_cooldown_pauses_once_when_unreadable():
     assert outcome.unreadable
     assert not outcome.reached_target
     assert len(slept) == 1
+    # The pause counts toward the reported wait (no under-reporting).
+    assert outcome.waited_s == POLICY.cool_interval_s
 
 
 def test_cooldown_gives_up_after_max_wait():
@@ -75,6 +77,17 @@ def test_cooldown_gives_up_after_max_wait():
     outcome = ctrl.cooldown()
     assert not outcome.reached_target
     assert outcome.waited_s == 60  # 3 intervals of 20s
+
+
+def test_cooldown_caps_total_wait_when_not_a_multiple():
+    # cap 50 is not a whole multiple of interval 20: the last pause is trimmed to
+    # 10 so total waiting is exactly 50, never overshooting to 60.
+    policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=50, cool_interval_s=20)
+    ctrl, slept = _controller([HOT] * 100, policy)
+    outcome = ctrl.cooldown()
+    assert not outcome.reached_target
+    assert outcome.waited_s == 50
+    assert slept == [20, 20, 10]
 
 
 def test_prestart_ok_when_already_cool():

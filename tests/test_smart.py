@@ -56,17 +56,37 @@ def test_empty_report_has_no_report():
     assert not info.has_report
 
 
+# A minimal smartctl --json -i payload that counts as a real report (has_report
+# keys off model/serial), regardless of the exit status smartctl would set.
+_REPORT_JSON = '{"model_name": "X", "serial_number": "Y"}'
+
+
 def test_detect_access_mode_prefers_bare(fake_runner: FakeRunner):
-    fake_runner.add("smartctl", contains=["-i"], returncode=0)
+    # Bare/auto yields a real report -> chosen first, no bridge mode tried.
+    fake_runner.add("smartctl", contains=["-i"], stdout=_REPORT_JSON)
     assert detect_access_mode(fake_runner, "/dev/sda") == []
 
 
 def test_detect_access_mode_finds_working_bridge_mode():
     runner = FakeRunner()
-    # bare and nvme fail; sntasmedia works
-    runner.add("smartctl", contains=["-i", "sntasmedia"], returncode=0)
-    runner.add("smartctl", contains=["-i"], returncode=2)  # everything else fails
+    # Only the sntasmedia bridge mode returns a real report; bare/others don't.
+    runner.add("smartctl", contains=["-i", "sntasmedia"], stdout=_REPORT_JSON)
+    runner.add("smartctl", contains=["-i"], stdout="No such device")
     assert detect_access_mode(runner, "/dev/sda") == ["-d", "sntasmedia"]
+
+
+def test_detect_access_mode_accepts_report_despite_nonzero_exit():
+    # smartctl sets diagnostic bits (non-zero exit) on an aging drive but still
+    # prints a full report - the correct mode must not be skipped.
+    runner = FakeRunner()
+    runner.add("smartctl", contains=["-i"], stdout=_REPORT_JSON, returncode=4)
+    assert detect_access_mode(runner, "/dev/sda") == []
+
+
+def test_detect_access_mode_falls_back_when_nothing_works():
+    runner = FakeRunner()
+    runner.add("smartctl", contains=["-i"], stdout="No such device")
+    assert detect_access_mode(runner, "/dev/sda") == []
 
 
 def test_read_smart_returns_no_report_on_bad_json(fake_runner: FakeRunner):

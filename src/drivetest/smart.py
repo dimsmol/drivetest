@@ -140,14 +140,21 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
 
 
 def detect_access_mode(runner: Runner, dev_path: str) -> list[str]:
-    """Return the first ``-d`` arg set for which ``smartctl -i`` succeeds.
+    """Return the first ``-d`` arg set that yields a real report from ``smartctl``.
 
-    Falls back to bare (``[]``) if none clearly work, so the caller can still
-    try. Order matters: bare/auto is preferred over an explicit bridge mode.
+    Acceptance is by report content (model/serial present), not exit code:
+    smartctl sets diagnostic bits in its status while still printing a full
+    report, so a failing/aging drive on the correct bridge mode would be skipped
+    if we trusted the exit code. Falls back to bare (``[]``) if none work, so the
+    caller can still try. Order matters: bare/auto is preferred over a bridge mode.
     """
     for mode in ACCESS_MODES:
-        result = runner.run(["smartctl", "-i", *mode, dev_path])
-        if result.ok:
+        result = runner.run(["smartctl", "--json", "-i", *mode, dev_path])
+        try:
+            info = parse_smart_json(result.json())
+        except ValueError:
+            continue
+        if info.has_report:
             return list(mode)
     return []
 

@@ -116,15 +116,18 @@ class ThermalController:
         temp: Temp = None
         while waited < policy.cool_max_wait_s:
             temp = self._sample()
+            # Cap the pause so cumulative waiting never exceeds cool_max_wait_s,
+            # even when it is not a whole multiple of cool_interval_s.
+            pause = min(policy.cool_interval_s, policy.cool_max_wait_s - waited)
             if temp is None:
                 self._log("cooldown: temperature unreadable - pausing one interval")
-                self._sleep(policy.cool_interval_s)
-                return CooldownOutcome(False, True, waited, None)
+                self._sleep(pause)
+                return CooldownOutcome(False, True, waited + pause, None)
             if temp <= policy.cool_target_c:
                 self._log(f"cooldown: reached {temp} C after {waited:.0f}s")
                 return CooldownOutcome(True, False, waited, temp)
-            self._sleep(policy.cool_interval_s)
-            waited += policy.cool_interval_s
+            self._sleep(pause)
+            waited += pause
         self._log(f"cooldown: still {temp} C after {waited:.0f}s - continuing")
         return CooldownOutcome(False, False, waited, temp)
 

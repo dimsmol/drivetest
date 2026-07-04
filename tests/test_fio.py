@@ -77,6 +77,23 @@ def test_parse_read_json_no_jobs():
         parse_read_json({"jobs": []}, "seqread")
 
 
+def test_parse_read_json_raises_on_job_error():
+    # A non-zero fio job error means the run failed; its numbers are unreliable.
+    with pytest.raises(ValueError):
+        parse_read_json({"jobs": [{"error": 5, "read": {"bw_bytes": 1, "iops": 1}}]}, "seqread")
+
+
+def test_parse_read_json_raises_on_missing_bandwidth():
+    # Missing bandwidth must not be reported as a genuine 0 B/s.
+    with pytest.raises(ValueError):
+        parse_read_json({"jobs": [{"read": {"iops": 10}}]}, "seqread")
+
+
+def test_parse_read_json_raises_on_missing_iops():
+    with pytest.raises(ValueError):
+        parse_read_json({"jobs": [{"read": {"bw_bytes": 1000}}]}, "seqread")
+
+
 # --- region classification ------------------------------------------------
 
 def test_classify_region():

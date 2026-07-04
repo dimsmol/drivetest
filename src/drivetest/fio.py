@@ -29,6 +29,7 @@ from typing import Any, TextIO
 
 from .planning import Region
 from .thermal import Temp, ThermalPolicy, exceeds_ceiling
+from .units import KIB
 
 # fio ETA options: force an ETA line every 30s even though stdout is captured
 # (fio would otherwise stay silent until done), on its own line so it streams.
@@ -113,17 +114,29 @@ def build_read_argv(dev_path: str, kind: str) -> list[str]:
 
 
 def parse_read_json(obj: dict[str, Any], kind: str) -> ReadStats:
-    """Extract bandwidth and IOPS from fio's JSON for a read job."""
+    """Extract bandwidth and IOPS from fio's JSON for a read job.
+
+    Raises ``ValueError`` if the job failed (non-zero ``error``) or the numbers
+    are absent: a missing figure means the benchmark did not produce a result,
+    which must not be reported as a genuine 0 B/s.
+    """
     jobs: list[Any] = obj.get("jobs") or []
     if not jobs:
         raise ValueError("fio JSON has no jobs")
     job: dict[str, Any] = jobs[0] or {}
+    if job.get("error"):
+        raise ValueError(f"fio job reported error {job['error']}")
     read: dict[str, Any] = job.get("read") or {}
     bw_bytes = read.get("bw_bytes")
     if bw_bytes is None:
-        # Older fio reports bw in KiB/s only.
-        bw_bytes = (read.get("bw") or 0) * 1024
-    return ReadStats(kind=kind, bw_bytes=int(bw_bytes), iops=float(read.get("iops") or 0.0))
+        bw = read.get("bw")  # older fio reports bw in KiB/s only
+        if bw is None:
+            raise ValueError("fio JSON read section has no bandwidth")
+        bw_bytes = bw * KIB
+    iops = read.get("iops")
+    if iops is None:
+        raise ValueError("fio JSON read section has no iops")
+    return ReadStats(kind=kind, bw_bytes=int(bw_bytes), iops=float(iops))
 
 
 def classify_region(overheat: bool, returncode: int) -> RegionResult:

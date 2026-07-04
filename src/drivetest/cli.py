@@ -95,6 +95,13 @@ def parse_args(argv: list[str]) -> RunConfig:
 
     if ns.parts < 1:
         parser.error("--parts needs a positive integer")
+    # Compared against the default because argparse can't tell an explicit
+    # "--parts 1" from the default; a user passing 1 loses nothing by it.
+    if ns.parts != DEFAULT_PARTS:
+        if not ns.write:
+            parser.error("--parts only applies together with --write")
+        if ns.quick:
+            parser.error("--parts has no effect with --quick (a quick run writes one region)")
     if ns.only is not None:
         if not (ns.write and not ns.quick):
             parser.error("--only requires --write without --quick")

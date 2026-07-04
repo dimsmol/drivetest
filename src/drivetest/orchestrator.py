@@ -163,6 +163,9 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     # --- write + verify ---------------------------------------------------
     verify = VerifyOutcome(VerifyStatus.SKIPPED)
     if config.write:
+        rc = _recheck_before_write(ctx, dev, logger)
+        if rc != EXIT_OK:
+            return rc
         try:
             verify = _write_phase(config, ctx, dev, logger, thermal, fio_runner, log_dir)
         except (Exception, KeyboardInterrupt) as exc:
@@ -258,8 +261,16 @@ def _guard_and_confirm(config: RunConfig, ctx: RunContext, dev: Device, logger: 
         if answer.strip() != dev.serial or not dev.serial:
             logger.log("aborted (serial mismatch or empty).")
             return EXIT_REFUSED
+    return EXIT_OK
 
-    # Last-line-of-defense re-check just before writing: same device, still idle.
+
+def _recheck_before_write(ctx: RunContext, dev: Device, logger: Logger) -> int:
+    """Last-line-of-defense re-check immediately before the write.
+
+    Run after everything else (including the read-only SMART baseline) so the
+    smallest possible window remains between it and ``fio``: the node must still
+    name the same physical device (not reassigned by a replug) and be idle.
+    """
     try:
         current = find_device(ctx.runner, dev.path)
     except LookupError:

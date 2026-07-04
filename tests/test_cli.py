@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from drivetest.cli import parse_args
+from drivetest.config import DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY
 
 
 def test_minimal_readonly():
@@ -44,6 +45,26 @@ def test_only_spec_validated_against_parts():
 def test_parts_must_be_positive():
     with pytest.raises(SystemExit):
         parse_args(["--write", "--parts", "0", "/dev/sdb"])
+
+
+def test_parts_requires_write():
+    # --parts only paces the write pass; it's meaningless (and silently ignored)
+    # without --write.
+    with pytest.raises(SystemExit):
+        parse_args(["--parts", "8", "/dev/sdb"])
+
+
+def test_parts_rejected_with_quick():
+    # --quick writes a single region, so --parts would be silently discarded.
+    with pytest.raises(SystemExit):
+        parse_args(["--write", "--quick", "--parts", "8", "/dev/sdb"])
+
+
+def test_write_force_quick_flags_map_into_config():
+    opts = parse_args(["--write", "--force", "--quick", "/dev/sdb"])
+    assert opts.write and opts.force and opts.quick
+    assert opts.quick_bytes == DEFAULT_QUICK_BYTES
+    assert opts.policy is DEFAULT_THERMAL_POLICY
 
 
 def test_force_requires_write():

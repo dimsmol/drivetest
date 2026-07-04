@@ -131,7 +131,9 @@ class _SequencedSmartRunner(FakeRunner):
 
     def run(self, argv, *, input=None, timeout=None):
         argv_list = list(argv)
-        if argv_list[0] == "smartctl" and "--json" in argv_list:
+        # Only the full-report (`-x`) snapshots are scripted; the `--json -i`
+        # access-mode probe falls through to the registered rules.
+        if argv_list[0] == "smartctl" and "--json" in argv_list and "-x" in argv_list:
             self.calls.append(argv_list)
             return Result(tuple(argv_list), 0, next(self._seq), "")
         return super().run(argv, input=input, timeout=timeout)
