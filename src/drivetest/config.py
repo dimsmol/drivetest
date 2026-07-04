@@ -10,6 +10,7 @@ imports these defaults; they flow in through ``RunConfig``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from .thermal import ThermalPolicy
 from .units import GIB
@@ -51,9 +52,11 @@ class RunConfig:
     write: bool
     quick: bool
     force: bool
+    # The raw --only spec, kept as the user typed it ("1-4"): it's echoed back in
+    # resume instructions, and parsing needs --parts, so it's expanded where used.
     only: str | None
     assume_yes: bool
-    log_dir: str | None
+    log_dir: Path | None
     parts: int
     quick_bytes: int
     policy: ThermalPolicy

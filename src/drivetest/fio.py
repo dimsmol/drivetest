@@ -38,6 +38,10 @@ ETA_OPTS = ["--eta=always", "--eta-newline=30s"]
 # Seconds to wait after SIGTERM before escalating to SIGKILL when stopping fio.
 TERMINATE_GRACE_S = 10
 
+# Throughput is conventionally reported in decimal MB/s (10^6 B/s), distinct from
+# the binary MiB (2^20) used for sizes elsewhere.
+MB = 1_000_000
+
 
 class RegionResult(Enum):
     PASS = "PASS"
@@ -90,12 +94,12 @@ class ReadStats:
     """Parsed result of a read benchmark."""
 
     kind: ReadKind
-    bw_bytes: int        # bandwidth, bytes/sec
+    bw_bytes: int  # bandwidth, bytes/sec
     iops: float
 
     @property
     def bw_mb(self) -> float:
-        return self.bw_bytes / 1_000_000
+        return self.bw_bytes / MB
 
 
 def build_writeverify_argv(dev_path: str, region: Region) -> list[str]:

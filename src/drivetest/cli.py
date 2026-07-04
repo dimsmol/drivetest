@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from .config import DEFAULT_PARTS, DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY, RunConfig
 from .orchestrator import EXIT_REFUSED, RunContext, run
@@ -123,7 +124,7 @@ def parse_args(argv: list[str]) -> RunConfig:
         force=ns.force,
         only=ns.only,
         assume_yes=ns.assume_yes,
-        log_dir=ns.log_dir,
+        log_dir=Path(ns.log_dir) if ns.log_dir else None,
         parts=ns.parts,
         quick_bytes=DEFAULT_QUICK_BYTES,
         policy=DEFAULT_THERMAL_POLICY,
@@ -137,7 +138,9 @@ def main(argv: list[str] | None = None) -> int:
         print("error: run as root (sudo)", file=sys.stderr)
         return EXIT_REFUSED
 
-    return run(options, RunContext())
+    # Resolve --log-dir into the run's working directory (where the timestamped
+    # log folder is created); default to the current directory.
+    return run(options, RunContext(workdir=options.log_dir or Path(".")))
 
 
 if __name__ == "__main__":

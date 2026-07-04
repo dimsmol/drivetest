@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from drivetest.cli import parse_args
+from drivetest.cli import main, parse_args
 from drivetest.config import DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY
 
 
@@ -80,4 +82,26 @@ def test_device_required():
 def test_assume_yes_and_log_dir():
     opts = parse_args(["--write", "--assume-yes", "--log-dir", "/tmp/logs", "/dev/sdb"])
     assert opts.assume_yes
-    assert opts.log_dir == "/tmp/logs"
+    assert opts.log_dir == Path("/tmp/logs")
+
+
+def _run_capturing_workdir(monkeypatch) -> dict[str, Path]:
+    """Patch out the root check and the real run; capture the run's workdir."""
+    captured: dict[str, Path] = {}
+    monkeypatch.setattr("drivetest.cli.os.geteuid", lambda: 0)
+    monkeypatch.setattr(
+        "drivetest.cli.run", lambda _opts, ctx: captured.setdefault("workdir", ctx.workdir) or 0
+    )
+    return captured
+
+
+def test_main_wires_log_dir_into_workdir(monkeypatch):
+    captured = _run_capturing_workdir(monkeypatch)
+    main(["--write", "--assume-yes", "--log-dir", "/tmp/logs", "/dev/sdb"])
+    assert captured["workdir"] == Path("/tmp/logs")
+
+
+def test_main_defaults_workdir_to_cwd(monkeypatch):
+    captured = _run_capturing_workdir(monkeypatch)
+    main(["/dev/sdb"])
+    assert captured["workdir"] == Path(".")

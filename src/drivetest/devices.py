@@ -98,14 +98,20 @@ def _clean(value: Any) -> str | None:
 
 
 def _device_from_node(node: dict[str, Any]) -> Device:
+    # Every lsblk device has a name; its absence is malformed output. Requiring it
+    # also means the path fallback below is always a real "/dev/<name>", never
+    # "/dev/None".
+    name = _clean(node.get("name"))
+    if name is None:
+        raise ValueError("lsblk device node has no name")
     raw_mounts: list[Any] = node.get("mountpoints") or []
     mountpoints = tuple(str(mp) for mp in raw_mounts if mp)
     raw_children: list[Any] = node.get("children") or []
     children = tuple(_device_from_node(child) for child in raw_children)
     size = node.get("size")
     return Device(
-        path=str(node.get("path") or f"/dev/{node.get('name')}"),
-        name=str(node.get("name") or ""),
+        path=str(node.get("path") or f"/dev/{name}"),
+        name=name,
         type=str(node.get("type") or ""),
         size=int(size) if size is not None else None,
         model=_clean(node.get("model")),
