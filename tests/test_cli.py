@@ -72,6 +72,19 @@ def test_parts_requires_write():
         parse_args(["--parts", "8", "/dev/sdb"])
 
 
+def test_explicit_default_parts_still_requires_write():
+    # Even --parts 1 (equal to the default value) is rejected without --write, so
+    # the "requires --write" rule applies to any *explicit* --parts and doesn't
+    # silently depend on the default happening to be 1.
+    with pytest.raises(SystemExit):
+        parse_args(["--parts", "1", "/dev/sdb"])
+
+
+def test_omitted_parts_defaults_to_one():
+    # No --parts still resolves to the default of 1 (a single full-drive region).
+    assert parse_args(["/dev/sdb"]).parts == 1
+
+
 def test_parts_rejected_with_quick():
     # --quick writes a single region, so --parts would be silently discarded.
     with pytest.raises(SystemExit):

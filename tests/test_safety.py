@@ -145,6 +145,16 @@ def test_duplicate_serial_rejected():
     assert not check_serial_unique(dev, ["DUP", "DUP", "OTHER"]).ok
 
 
+def test_serial_absent_from_enumeration_fails_closed():
+    # Our own disk's serial isn't among the attached disks at all - an enumeration
+    # anomaly (the serial list is a separate pass than the target). We can't
+    # confirm identity, so fail closed rather than pass as "unique".
+    dev = _disk(serial="GHOST")
+    check = check_serial_unique(dev, ["OTHER1", "OTHER2"])
+    assert not check.ok
+    assert "not be found" in check.detail or "not found" in check.detail
+
+
 def test_unique_serial_accepted():
     dev = _disk(serial="UNIQUE")
     assert check_serial_unique(dev, ["UNIQUE", "OTHER"]).ok

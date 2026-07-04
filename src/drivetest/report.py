@@ -140,13 +140,17 @@ def health_regressions(before: SmartInfo, after: SmartInfo) -> list[str]:
 
 
 def classify_smart(
-    after: SmartInfo, deltas: list[SmartDelta], regressions: Sequence[str] = ()
+    after: SmartInfo, deltas: list[SmartDelta], regressions: Sequence[str]
 ) -> SmartVerdict:
     """Turn the after-snapshot and diff into a verdict.
 
     A post-run report that isn't a real report (device dropped) is UNKNOWN, not
     clean - an error payload must never be reported as a healthy result. Any
     counter delta or non-counter health regression means CHANGED.
+
+    ``regressions`` is required (no default): it is the only channel for
+    non-counter regressions such as a raised NVMe critical warning, so a caller
+    must consciously supply it rather than silently omit the signal.
     """
     if not after.has_report:
         return SmartVerdict.UNKNOWN

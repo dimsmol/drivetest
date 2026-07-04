@@ -161,12 +161,19 @@ def check_serial_unique(dev: Device, all_serials: Sequence[str]) -> Check:
             "unique-serial", False, f"{dev.path} reports no serial (identity unverifiable)"
         )
     count = sum(1 for s in all_serials if s == dev.serial)
-    if count > 1:
-        return Check(
-            "unique-serial",
-            False,
-            f"serial '{dev.serial}' is not unique among attached disks ({count} matches)",
-        )
+    if count != 1:
+        # count == 0 means our own disk's serial isn't among the attached disks -
+        # an enumeration anomaly (the serial list is gathered by a separate pass
+        # than the target), so we can't confirm identity. Fail closed, like a
+        # duplicate: a positively-unique serial is the only pass.
+        if count == 0:
+            detail = (
+                f"serial '{dev.serial}' was not found among attached disks "
+                "(enumeration anomaly - cannot confirm identity)"
+            )
+        else:
+            detail = f"serial '{dev.serial}' is not unique among attached disks ({count} matches)"
+        return Check("unique-serial", False, detail)
     return Check("unique-serial", True, f"serial '{dev.serial}' is unique")
 
 

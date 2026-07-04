@@ -29,7 +29,7 @@ def test_no_change_is_clean():
     after = replace(HEALTHY)
     deltas = diff_smart(before, after)
     assert deltas == []
-    assert classify_smart(after, deltas) is SmartVerdict.CLEAN
+    assert classify_smart(after, deltas, []) is SmartVerdict.CLEAN
 
 
 def test_worsened_media_errors_flagged():
@@ -39,7 +39,7 @@ def test_worsened_media_errors_flagged():
     assert len(deltas) == 1
     assert deltas[0].field == "media_errors"
     assert deltas[0].before == 0 and deltas[0].after == 3
-    assert classify_smart(after, deltas) is SmartVerdict.CHANGED
+    assert classify_smart(after, deltas, []) is SmartVerdict.CHANGED
 
 
 def test_reallocated_sectors_worsening_flagged():
@@ -54,7 +54,7 @@ def test_crc_errors_worsening_flagged():
     after = replace(HEALTHY, crc_errors=7)
     deltas = diff_smart(before, after)
     assert deltas[0].field == "crc_errors"
-    assert classify_smart(after, deltas) is SmartVerdict.CHANGED
+    assert classify_smart(after, deltas, []) is SmartVerdict.CHANGED
 
 
 def test_pending_sectors_worsening_flagged():
@@ -95,7 +95,7 @@ def test_changed_verdict_from_real_parsed_reports():
     after = parse_smart_json(after_obj)
     deltas = diff_smart(before, after)
     assert deltas and deltas[0].field == "media_errors"
-    assert classify_smart(after, deltas) is SmartVerdict.CHANGED
+    assert classify_smart(after, deltas, []) is SmartVerdict.CHANGED
 
 
 def test_health_self_assessment_flip_is_a_regression():
@@ -164,12 +164,12 @@ def test_absent_report_is_unknown_not_clean():
     # The classic trap: a dropped device's error payload must not read as clean.
     dropped = SmartInfo(raw=None)
     assert not dropped.has_report
-    assert classify_smart(dropped, []) is SmartVerdict.UNKNOWN
+    assert classify_smart(dropped, [], []) is SmartVerdict.UNKNOWN
 
 
 def test_real_report_stays_clean_when_unchanged():
     info = parse_smart_json(load_json("smart_nvme.json"))
-    assert classify_smart(info, []) is SmartVerdict.CLEAN
+    assert classify_smart(info, [], []) is SmartVerdict.CLEAN
 
 
 def test_verify_outcome_needs_attention():

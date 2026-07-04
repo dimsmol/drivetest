@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--parts",
         type=int,
-        default=DEFAULT_PARTS,
+        default=None,  # None = not given; resolved to DEFAULT_PARTS after validation
         metavar="N",
         help=f"split the full write+verify into N cooled regions (default {DEFAULT_PARTS})",
     )
@@ -110,11 +110,14 @@ def parse_args(argv: list[str]) -> RunConfig:
     parser = build_parser()
     ns = parser.parse_args(argv)
 
-    if ns.parts < 1:
+    # --parts defaults to None so an explicit value is distinguishable from the
+    # default: the "requires --write" rule then applies to any explicit --parts,
+    # not just one that happens to differ from DEFAULT_PARTS (which would silently
+    # accept "--parts 1", and break outright if the default ever changed).
+    parts = DEFAULT_PARTS if ns.parts is None else ns.parts
+    if parts < 1:
         parser.error("--parts needs a positive integer")
-    # Compared against the default because argparse can't tell an explicit
-    # "--parts 1" from the default; a user passing 1 loses nothing by it.
-    if ns.parts != DEFAULT_PARTS:
+    if ns.parts is not None:
         if not ns.write:
             parser.error("--parts only applies together with --write")
         if ns.quick:
@@ -123,7 +126,7 @@ def parse_args(argv: list[str]) -> RunConfig:
         if not (ns.write and not ns.quick):
             parser.error("--only requires --write without --quick")
         try:
-            parse_only_spec(ns.only, ns.parts)
+            parse_only_spec(ns.only, parts)
         except ValueError as exc:
             parser.error(str(exc))
     if ns.quick and not ns.write:
@@ -141,7 +144,7 @@ def parse_args(argv: list[str]) -> RunConfig:
         only=ns.only,
         assume_yes=ns.assume_yes,
         log_dir=Path(ns.log_dir) if ns.log_dir else None,
-        parts=ns.parts,
+        parts=parts,
         quick_bytes=DEFAULT_QUICK_BYTES,
         policy=DEFAULT_THERMAL_POLICY,
     )
