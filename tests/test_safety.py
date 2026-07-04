@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -28,9 +29,39 @@ def _disk(**over) -> Device:
     base = dict(
         path="/dev/sdx", name="sdx", type="disk", size=100,
         serial="UNIQUE", model="M", wwn=None, tran="usb",
+        mountpoints=(), children=(),
     )
     base.update(over)
     return Device(**base)  # type: ignore[arg-type]
+
+
+def _probe(**over) -> BlankProbe:
+    """A BlankProbe defaulting to blank/no-error; a test overrides only the fields
+    it cares about. Production always sets all four explicitly, so they have no
+    real defaults - this helper holds the test-only convenience.
+    """
+    base = dict(holders=(), signatures=(), children=(), probe_error=False)
+    base.update(over)
+    return BlankProbe(**base)  # type: ignore[arg-type]
+
+
+def _root(**over) -> RootInfo:
+    """A RootInfo defaulting to an established, unrelated root; overridden per test."""
+    base = dict(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",), resolved=True)
+    base.update(over)
+    return RootInfo(**base)  # type: ignore[arg-type]
+
+
+def _evaluate(
+    dev: Device, *, root: RootInfo, probe: BlankProbe, all_serials: Sequence[str],
+    force: bool = False,
+) -> list[Check]:
+    """evaluate_write_safety with force defaulting to False (the safe, non-forced
+    case), so only tests that exercise --force pass it explicitly.
+    """
+    return evaluate_write_safety(
+        dev, root=root, probe=probe, all_serials=all_serials, force=force
+    )
 
 
 # --- whole disk -----------------------------------------------------------
@@ -71,14 +102,14 @@ def test_unmounted_disk_accepted():
 
 def test_disk_backing_root_is_rejected():
     dev = _disk(name="nvme0n1", path="/dev/nvme0n1")
-    root = RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1p4", "nvme0n1"))
+    root = _root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1p4", "nvme0n1"))
     assert not check_not_system_disk(dev, root).ok
 
 
 def test_system_disk_matched_by_path_when_name_differs():
     # The name doesn't match a parent disk, but the /dev path does - still refuse.
     dev = _disk(name="something-else", path="/dev/nvme0n1")
-    root = RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",))
+    root = _root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",))
     assert not check_not_system_disk(dev, root).ok
 
 
@@ -86,19 +117,19 @@ def test_system_disk_matched_when_parent_reported_with_dev_prefix():
     # The root walk may report a parent as a full "/dev/..." path; the guard must
     # still match it against the target rather than depend on the bare-name form.
     dev = _disk(name="sda", path="/dev/sda")
-    root = RootInfo(source="/dev/sda2", parent_disks=("/dev/sda",))
+    root = _root(source="/dev/sda2", parent_disks=("/dev/sda",))
     assert not check_not_system_disk(dev, root).ok
 
 
 def test_disk_not_backing_root_accepted():
     dev = _disk(name="sda", path="/dev/sda")
-    root = RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1p4", "nvme0n1"))
+    root = _root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1p4", "nvme0n1"))
     assert check_not_system_disk(dev, root).ok
 
 
 def test_unresolved_root_passes_but_flags_uncertainty():
     dev = _disk(name="sda", path="/dev/sda")
-    root = RootInfo(source="zfs/root", resolved=False)
+    root = _root(source="zfs/root", resolved=False)
     check = check_not_system_disk(dev, root)
     assert check.ok
     assert "cannot resolve" in check.detail
@@ -107,11 +138,11 @@ def test_unresolved_root_passes_but_flags_uncertainty():
 # --- blank ----------------------------------------------------------------
 
 def test_blank_disk_accepted():
-    assert check_blank(_disk(), BlankProbe()).ok
+    assert check_blank(_disk(), _probe()).ok
 
 
 def test_disk_with_signature_rejected():
-    probe = BlankProbe(signatures=("ntfs",))
+    probe = _probe(signatures=("ntfs",))
     check = check_blank(_disk(), probe)
     assert not check.ok
     assert "ntfs" in check.detail
@@ -119,14 +150,14 @@ def test_disk_with_signature_rejected():
 
 def test_blank_probe_error_fails_closed():
     # A probe that errored must be treated as non-blank, never "looks empty".
-    probe = BlankProbe(probe_error=True)
+    probe = _probe(probe_error=True)
     assert not probe.is_blank
     assert not check_blank(_disk(), probe).ok
 
 
 def test_holders_or_children_reject():
-    assert not check_blank(_disk(), BlankProbe(holders=("dm-0",))).ok
-    assert not check_blank(_disk(), BlankProbe(children=("sdx1",))).ok
+    assert not check_blank(_disk(), _probe(holders=("dm-0",))).ok
+    assert not check_blank(_disk(), _probe(children=("sdx1",))).ok
 
 
 # --- serial uniqueness ----------------------------------------------------
@@ -181,10 +212,10 @@ def test_identity_distinguishes_none_from_empty():
 
 def test_evaluate_all_pass_for_a_good_new_drive():
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(),
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(),
         all_serials=["UNIQUE"],
     )
     assert blocking_failures(checks) == []
@@ -192,11 +223,11 @@ def test_evaluate_all_pass_for_a_good_new_drive():
 
 def test_force_downgrades_only_blank():
     dev = _disk(serial="UNIQUE", type="part")  # whole-disk fails
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
         # An established root that isn't this device: force may downgrade blank.
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(signatures=("ext4",)),  # blank fails
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(signatures=("ext4",)),  # blank fails
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -211,10 +242,10 @@ def test_force_does_not_downgrade_blank_when_root_unresolved():
     # the only thing standing between --force and the live system disk, so force
     # must NOT downgrade it.
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="zfs/root", resolved=False),
-        probe=BlankProbe(signatures=("ext4",)),  # non-blank
+        root=_root(source="zfs/root", resolved=False),
+        probe=_probe(signatures=("ext4",)),  # non-blank
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -226,10 +257,10 @@ def test_force_does_not_downgrade_blank_when_root_walk_empty():
     # resolved=True but no parent disks == not actually established; same risk as
     # an unresolved root, so force must not downgrade blank here either.
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/x", parent_disks=(), resolved=True),
-        probe=BlankProbe(signatures=("ext4",)),
+        root=_root(source="/dev/x", parent_disks=(), resolved=True),
+        probe=_probe(signatures=("ext4",)),
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -242,10 +273,10 @@ def test_force_does_not_downgrade_blank_when_probe_errored():
     # overrides data we positively read (signatures/holders), not a state we
     # failed to read, so an errored probe keeps the blank guard blocking.
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(probe_error=True),
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(probe_error=True),
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -257,10 +288,10 @@ def test_force_clears_a_non_blank_but_otherwise_good_disk():
     # The positive case: an established, unrelated root and a real signature (not a
     # probe error). Force downgrades blank and nothing else blocks the write.
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(signatures=("ext4",)),
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(signatures=("ext4",)),
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -271,17 +302,17 @@ def test_empty_parent_disks_is_uncertain_not_clean():
     # A resolved root that names no disk cannot clear a target as "not the system
     # disk"; the guard must flag uncertainty rather than pass cleanly.
     dev = _disk(name="sda", path="/dev/sda")
-    check = check_not_system_disk(dev, RootInfo(source="/dev/x", parent_disks=(), resolved=True))
+    check = check_not_system_disk(dev, _root(source="/dev/x", parent_disks=(), resolved=True))
     assert check.ok  # non-blocking, but...
     assert "cannot resolve" in check.detail  # ...flagged as uncertain, not "does not back /"
 
 
 def test_force_does_not_bypass_system_disk_guard():
     dev = _disk(name="nvme0n1", path="/dev/nvme0n1", serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(signatures=("ext4",)),
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(signatures=("ext4",)),
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -293,10 +324,10 @@ def test_force_does_not_bypass_serial_guard():
     # force downgrades only the blank check; a duplicate serial (an ambiguous or
     # wrong node) must keep blocking, as the docstring promises.
     dev = _disk(serial="DUP")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(signatures=("ext4",)),
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(signatures=("ext4",)),
         all_serials=["DUP", "DUP"],
         force=True,
     )
@@ -309,10 +340,10 @@ def test_force_does_not_downgrade_blank_when_a_holder_is_present():
     # the disk is in use right now. The mount guard won't catch an unmounted
     # holder, so - unlike a passive signature - force must NOT wave it past.
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(holders=("dm-0",)),  # non-blank due to an active holder
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(holders=("dm-0",)),  # non-blank due to an active holder
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -324,10 +355,10 @@ def test_force_still_downgrades_blank_for_a_passive_signature():
     # The counterpart: a purely passive on-disk signature (no holder, no probe
     # error) is exactly what force is for, so blank is downgraded and clears.
     dev = _disk(serial="UNIQUE")
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         dev,
-        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
-        probe=BlankProbe(signatures=("ext4",)),
+        root=_root(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
+        probe=_probe(signatures=("ext4",)),
         all_serials=["UNIQUE"],
         force=True,
     )
@@ -339,11 +370,11 @@ def test_force_does_not_bypass_mount_guard():
     # must stay blocked even under --force.
     [nvme] = parse_lsblk(load_text("lsblk_nvme_system.json"))
     assert nvme.serial is not None
-    checks = evaluate_write_safety(
+    checks = _evaluate(
         nvme,
         # An established, unrelated root so only the mount guard is at issue.
-        root=RootInfo(source="/dev/other", parent_disks=("other",)),
-        probe=BlankProbe(signatures=("ext4",)),
+        root=_root(source="/dev/other", parent_disks=("other",)),
+        probe=_probe(signatures=("ext4",)),
         all_serials=[nvme.serial],
         force=True,
     )

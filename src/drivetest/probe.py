@@ -16,7 +16,7 @@ from .proc import Runner
 from .safety import BlankProbe, RootInfo
 
 
-def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str = "/sys/block") -> BlankProbe:
+def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str) -> BlankProbe:
     """Probe a disk for any content. Fails closed: any read error sets
     ``probe_error`` so the blank guard treats the disk as non-blank.
     """
@@ -75,30 +75,30 @@ def gather_root_info(runner: Runner) -> RootInfo:
     """
     result = runner.run(["findmnt", "-J", "-o", "SOURCE,TARGET", "/"])
     if not result.ok:
-        return RootInfo(source=None, resolved=False)
+        return RootInfo(source=None, parent_disks=(), resolved=False)
     try:
         data: dict[str, Any] = result.json()
         filesystems: list[Any] = data.get("filesystems") or []
     # AttributeError/TypeError guard valid-but-non-object JSON; fail closed.
     except (ValueError, AttributeError, TypeError):
-        return RootInfo(source=None, resolved=False)
+        return RootInfo(source=None, parent_disks=(), resolved=False)
     if not filesystems:
-        return RootInfo(source=None, resolved=False)
+        return RootInfo(source=None, parent_disks=(), resolved=False)
 
     first: dict[str, Any] = filesystems[0] or {}
     raw_source = first.get("source")
     if not raw_source:
-        return RootInfo(source=None, resolved=False)
+        return RootInfo(source=None, parent_disks=(), resolved=False)
     # Strip a btrfs subvolume suffix like "/dev/sda2[/@root]".
     source = str(raw_source).split("[", 1)[0]
 
     if not source.startswith("/dev/"):
-        return RootInfo(source=source, resolved=False)
+        return RootInfo(source=source, parent_disks=(), resolved=False)
 
     walk = runner.run(["lsblk", "-nrso", "NAME", source])
     if not walk.ok:
         # We know the source but can't resolve parents; treat as unresolved.
-        return RootInfo(source=source, resolved=False)
+        return RootInfo(source=source, parent_disks=(), resolved=False)
     parents = tuple(line.strip() for line in walk.stdout.splitlines() if line.strip())
     # An empty walk (lsblk succeeded but named no disk) leaves nothing to compare
     # the target against, so the root is not actually established - mark it

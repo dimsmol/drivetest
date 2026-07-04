@@ -214,7 +214,7 @@ def test_format_gib_tiny_nonzero_is_not_shown_as_zero():
 
 def test_logger_tees_to_file(tmp_path, capsys):
     summary = tmp_path / "summary.log"
-    logger = Logger(summary)
+    logger = Logger(summary, stream=None)
     logger.log("hello")
     logger.log("world")
     assert summary.read_text() == "hello\nworld\n"

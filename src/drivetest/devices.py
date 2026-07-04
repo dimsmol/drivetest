@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, cast
 
 from .proc import Runner, run_json
@@ -37,12 +37,12 @@ class Device:
     name: str
     type: str
     size: int | None
-    model: str | None = None
-    serial: str | None = None
-    wwn: str | None = None
-    tran: str | None = None
-    mountpoints: tuple[str, ...] = ()
-    children: tuple[Device, ...] = field(default_factory=tuple)
+    model: str | None
+    serial: str | None
+    wwn: str | None
+    tran: str | None
+    mountpoints: tuple[str, ...]
+    children: tuple[Device, ...]
 
     @property
     def is_disk(self) -> bool:

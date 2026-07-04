@@ -9,7 +9,10 @@ from .conftest import FakeRunner, load_text
 
 
 def _disk(name="sdx", children=()):
-    return Device(path=f"/dev/{name}", name=name, type="disk", size=100, children=children)
+    return Device(
+        path=f"/dev/{name}", name=name, type="disk", size=100,
+        model=None, serial=None, wwn=None, tran=None, mountpoints=(), children=children,
+    )
 
 
 def _sys_block(tmp_path, *, name="sdx", holders=()) -> str:
@@ -93,7 +96,10 @@ def test_blank_probe_reports_holders(fake_runner: FakeRunner, tmp_path):
 
 
 def test_blank_probe_reports_children(fake_runner: FakeRunner, tmp_path):
-    child = Device(path="/dev/sdx1", name="sdx1", type="part", size=50)
+    child = Device(
+        path="/dev/sdx1", name="sdx1", type="part", size=50,
+        model=None, serial=None, wwn=None, tran=None, mountpoints=(), children=(),
+    )
     fake_runner.add("wipefs", stdout='{"signatures": []}')
     probe = gather_blank_probe(
         fake_runner, _disk(children=(child,)), sys_block=_sys_block(tmp_path)

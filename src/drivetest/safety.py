@@ -33,7 +33,7 @@ class Check:
 
     name: str
     ok: bool
-    detail: str = ""
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -44,10 +44,10 @@ class BlankProbe:
     be read; per fail-closed policy that alone marks the disk non-blank.
     """
 
-    holders: tuple[str, ...] = ()
-    signatures: tuple[str, ...] = ()
-    children: tuple[str, ...] = ()
-    probe_error: bool = False
+    holders: tuple[str, ...]
+    signatures: tuple[str, ...]
+    children: tuple[str, ...]
+    probe_error: bool
 
     @property
     def is_blank(self) -> bool:
@@ -65,8 +65,8 @@ class RootInfo:
     """
 
     source: str | None
-    parent_disks: tuple[str, ...] = ()
-    resolved: bool = True
+    parent_disks: tuple[str, ...]
+    resolved: bool
 
 
 def check_whole_disk(dev: Device) -> Check:
@@ -194,7 +194,7 @@ def evaluate_write_safety(
     root: RootInfo,
     probe: BlankProbe,
     all_serials: Sequence[str],
-    force: bool = False,
+    force: bool,
 ) -> list[Check]:
     """Run every pre-write guard and return their results, in order.
 

@@ -95,8 +95,7 @@ class RunContext:
     sys_block: str = "/sys/block"
 
 
-def run(config: RunConfig, ctx: RunContext | None = None) -> int:
-    ctx = ctx or RunContext()
+def run(config: RunConfig, ctx: RunContext) -> int:
     runner = ctx.runner
 
     # --- required tools ---------------------------------------------------

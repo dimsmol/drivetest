@@ -162,7 +162,7 @@ def classify_smart(
 class Logger:
     """Tee log lines to stdout and a summary file."""
 
-    def __init__(self, summary_path: Path, *, stream: TextIO | None = None) -> None:
+    def __init__(self, summary_path: Path, *, stream: TextIO | None) -> None:
         self._path = summary_path
         self._stream = stream
 

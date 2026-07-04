@@ -19,6 +19,7 @@ from drivetest.fio import (
     build_read_argv,
     build_writeverify_argv,
     classify_region,
+    default_popen,
     monitor_region,
     parse_read_json,
 )
@@ -135,6 +136,7 @@ def test_monitor_kills_on_ceiling_breach():
         policy=POLICY,
         sleep=sleep,
         kill=lambda: killed.append(True),
+        on_sample=lambda _t: None,
     )
     assert overheat
     assert killed == [True]
@@ -151,6 +153,7 @@ def test_monitor_returns_false_when_process_finishes_cool():
         policy=POLICY,
         sleep=sleep,
         kill=lambda: killed.append(True),
+        on_sample=lambda _t: None,
     )
     assert not overheat
     assert killed == []
@@ -166,6 +169,7 @@ def test_monitor_ignores_unreadable_temps():
         policy=POLICY,
         sleep=sleep,
         kill=lambda: pytest.fail("should not kill on unreadable temp"),
+        on_sample=lambda _t: None,
     )
     assert not overheat
 
@@ -390,6 +394,7 @@ def test_run_region_writeverify_on_scratch_file(tmp_path):
         read_temp=lambda: 30,          # always cool
         policy=POLICY,
         sleep=sleep,
+        popen=default_popen,           # the real subprocess, for this integration test
         echo=lambda line: None,
     )
     result = runner.run_region(str(scratch), Region(1, 0, 8 * MIB), log)

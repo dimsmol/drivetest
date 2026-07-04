@@ -77,6 +77,7 @@ def _controller(temps, policy=POLICY):
         policy,
         read_temp=lambda: next(seq, last),
         sleep=sleep,
+        log=lambda _m: None,
     )
     return ctrl, slept
 

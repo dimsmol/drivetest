@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import subprocess
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -56,10 +55,6 @@ class RegionResult(Enum):
 
 def _ignore_sample(_temp: Temp) -> None:
     pass
-
-
-def _print_line(line: str) -> None:
-    print(line, end="")
 
 
 class ReadKind(Enum):
@@ -204,7 +199,7 @@ def monitor_region(
     policy: ThermalPolicy,
     sleep: Callable[[float], None],
     kill: Callable[[], None],
-    on_sample: Callable[[Temp], None] | None = None,
+    on_sample: Callable[[Temp], None],
 ) -> bool:
     """Poll temperature while a region runs; kill fio at the ceiling.
 
@@ -212,7 +207,7 @@ def monitor_region(
     all of process liveness, temperature, sleeping and killing are injected, so
     the ceiling logic is tested without a real process.
     """
-    observe = on_sample or _ignore_sample
+    observe = on_sample
     while is_alive():
         temp = read_temp()
         observe(temp)
@@ -243,7 +238,7 @@ class FioRunner:
     :class:`~drivetest.proc.Runner` and :func:`parse_read_json` - so this class is
     only the write path. Effects are injected for testability: ``popen`` creates
     the process, ``read_temp``/``sleep`` drive the monitor, and ``echo`` receives
-    streamed output lines (default: print to stdout).
+    streamed output lines.
     """
 
     def __init__(
@@ -251,17 +246,19 @@ class FioRunner:
         *,
         read_temp: Callable[[], Temp],
         policy: ThermalPolicy,
-        sleep: Callable[[float], None] = time.sleep,
-        popen: PopenFactory = default_popen,
-        echo: Callable[[str], None] | None = None,
+        sleep: Callable[[float], None],
+        popen: PopenFactory,
+        echo: Callable[[str], None],
         on_sample: Callable[[Temp], None] | None = None,
     ) -> None:
         self._read_temp = read_temp
         self._policy = policy
         self._sleep = sleep
         self._popen = popen
-        self._echo = echo or _print_line
-        self._on_sample = on_sample
+        self._echo = echo
+        # on_sample is the one effect production leaves defaulted (the orchestrator
+        # doesn't observe per-sample temps here), so it keeps a no-op default.
+        self._on_sample = on_sample or _ignore_sample
 
     def run_region(self, dev_path: str, region: Region, log_path: Path) -> RegionResult:
         """Write+verify one region, streaming output to console and ``log_path``,

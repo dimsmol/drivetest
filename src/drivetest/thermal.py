@@ -81,10 +81,6 @@ def _ignore_sample(_temp: Temp) -> None:
     pass
 
 
-def _ignore_log(_message: str) -> None:
-    pass
-
-
 @dataclass(frozen=True)
 class CooldownOutcome:
     """Result of a cooldown wait.
@@ -105,8 +101,9 @@ class ThermalController:
     """Runs cooldown/pre-start waits using injected effects.
 
     ``read_temp`` returns the current temperature (or None), ``sleep`` advances
-    time, and ``on_sample``/``log`` are optional observers. Nothing here calls
-    the wall clock directly, so tests are deterministic.
+    time, and ``log`` receives progress lines. ``on_sample`` is an optional
+    observer. Nothing here calls the wall clock directly, so tests are
+    deterministic.
     """
 
     def __init__(
@@ -115,14 +112,14 @@ class ThermalController:
         read_temp: Callable[[], Temp],
         *,
         sleep: Callable[[float], None],
+        log: Callable[[str], None],
         on_sample: Sample | None = None,
-        log: Callable[[str], None] | None = None,
     ) -> None:
         self.policy = policy
         self._read_temp = read_temp
         self._sleep = sleep
         self._on_sample = on_sample or _ignore_sample
-        self._log = log or _ignore_log
+        self._log = log
 
     def _sample(self) -> Temp:
         temp = self._read_temp()
