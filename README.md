@@ -104,3 +104,7 @@ PYTHONPATH=src uvx --from import-linter lint-imports   # layering / no import cy
 ```
 
 `pyproject.toml` defines a `drivetest` console script, so `pip install -e .` also exposes the `drivetest` command directly (the `./drivetest` wrapper just avoids needing an install).
+
+## License
+
+MIT - see [LICENSE](LICENSE).
