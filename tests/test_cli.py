@@ -30,6 +30,21 @@ def test_quick_requires_write():
         parse_args(["--quick", "/dev/sdb"])
 
 
+def test_usage_error_exits_refused_not_two():
+    # A bad flag combination exits EXIT_REFUSED (1), not argparse's default 2,
+    # so it stays distinguishable from EXIT_ATTENTION (a run that needs attention).
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args(["--quick", "/dev/sdb"])
+    assert excinfo.value.code == EXIT_REFUSED
+
+
+def test_argparse_native_error_also_exits_refused():
+    # Even an argparse-native error (missing positional) maps to EXIT_REFUSED.
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args([])
+    assert excinfo.value.code == EXIT_REFUSED
+
+
 def test_only_requires_write():
     with pytest.raises(SystemExit):
         parse_args(["--only", "1-4", "/dev/sdb"])

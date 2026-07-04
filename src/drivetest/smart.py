@@ -119,6 +119,9 @@ def _ata_attr(obj: dict[str, Any], attr_id: int, name: str) -> int | None:
     table: list[Any] = attrs.get("table") or []
     for row in table:
         row_obj: dict[str, Any] = row or {}
+        # First row matching by id or (fallback) canonical name. The health ids we
+        # read (5/197/198/199) are standardized, so a first-match is unambiguous in
+        # practice, even though a vendor could in theory reuse an id for another name.
         if row_obj.get("id") == attr_id or row_obj.get("name") == name:
             raw: dict[str, Any] = row_obj.get("raw") or {}
             return _int(raw.get("value"))
@@ -149,6 +152,9 @@ def parse_smart_json(obj: dict[str, Any]) -> SmartInfo:
         health_passed=_bool_or_none(status.get("passed")),
         temperature_c=temp,
         media_errors=_int(nvme.get("media_errors")),
+        # available_spare is kept for display; spare *exhaustion* (spare below the
+        # firmware's available_spare_threshold) is already surfaced by the
+        # critical_warning bit we read, so the threshold itself isn't parsed.
         available_spare=_int(nvme.get("available_spare")),
         percentage_used=_int(nvme.get("percentage_used")),
         unsafe_shutdowns=_int(nvme.get("unsafe_shutdowns")),

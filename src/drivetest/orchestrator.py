@@ -5,8 +5,12 @@ This is the thin glue on top of the (heavily tested) pure modules. Its external
 effects are injected via :class:`RunContext`, so the safety-abort paths and the
 read-only happy path can be integration-tested with fakes.
 
-Exit codes: ``0`` OK, ``1`` usage/safety refusal, ``2`` attention needed
-(verify FAIL/OVERHEAT, disconnect, or worsened SMART).
+Exit codes: ``0`` OK, ``1`` refused to run (a usage error or a safety guard, so
+nothing was written), ``2`` ran but needs attention (verify FAIL/OVERHEAT,
+disconnect, or worsened SMART). A passing ``--only`` subset also exits ``0``: it
+verified only the parts it ran, so the whole drive is confirmed only once every
+part has passed across runs - the summary spells this out ("not the whole
+drive"), since the exit code alone can't distinguish a subset pass from a full one.
 """
 
 from __future__ import annotations

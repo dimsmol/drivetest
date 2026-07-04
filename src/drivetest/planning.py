@@ -39,6 +39,13 @@ def plan_regions(dev_bytes: int, parts: int) -> list[Region]:
     ``dev_bytes`` (a device size) and every MiB-aligned offset are multiples of
     the sector size, so the remainder is sector-aligned - fio writes full 1 MiB
     blocks and a final short, still-sector-aligned block, valid under ``--direct``.
+
+    The final region also absorbs the per-region rounding leftover, so it can be
+    up to ``parts`` MiB larger than the rest. This is deliberate: it keeps every
+    interior boundary MiB-aligned with the simplest exact tiling (matching the
+    reference shell implementation). At realistic ``parts`` the imbalance is a few
+    MiB on a multi-GiB region - negligible - and it is intentionally not spread
+    across regions, to avoid complicating the most resume-critical arithmetic here.
     """
     if parts < 1:
         raise ValueError(f"parts must be >= 1, got {parts}")

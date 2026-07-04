@@ -82,6 +82,14 @@ def test_system_disk_matched_by_path_when_name_differs():
     assert not check_not_system_disk(dev, root).ok
 
 
+def test_system_disk_matched_when_parent_reported_with_dev_prefix():
+    # The root walk may report a parent as a full "/dev/..." path; the guard must
+    # still match it against the target rather than depend on the bare-name form.
+    dev = _disk(name="sda", path="/dev/sda")
+    root = RootInfo(source="/dev/sda2", parent_disks=("/dev/sda",))
+    assert not check_not_system_disk(dev, root).ok
+
+
 def test_disk_not_backing_root_accepted():
     dev = _disk(name="sda", path="/dev/sda")
     root = RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1p4", "nvme0n1"))

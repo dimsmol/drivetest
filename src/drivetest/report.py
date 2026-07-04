@@ -172,4 +172,10 @@ class Logger:
 
 
 def format_gib(num_bytes: int) -> str:
-    return f"{num_bytes / GIB:.0f}GiB"
+    gib = num_bytes / GIB
+    # Whole-GiB and large values render without a fraction (drive-scale sizes);
+    # a small non-zero size keeps one decimal so a sub-GiB span (a region on a
+    # small device, or with many --parts) never misleadingly prints as "0GiB".
+    if gib >= 10 or gib == int(gib):
+        return f"{gib:.0f}GiB"
+    return f"{gib:.1f}GiB"

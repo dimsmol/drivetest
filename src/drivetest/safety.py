@@ -118,7 +118,13 @@ def check_not_system_disk(dev: Device, root: RootInfo) -> Check:
             f"cannot resolve the disk backing / (root source: {root.source}); "
             "relying on the blank-disk guard instead",
         )
-    if dev.name in root.parent_disks or dev.path in {f"/dev/{p}" for p in root.parent_disks}:
+    # Normalize both sides to bare kernel names, so a parent reported as either
+    # "nvme0n1" or "/dev/nvme0n1" (and a device whose name differs from its path
+    # basename) all compare correctly - the guard must not depend on which form
+    # the root walk happened to yield.
+    parents = {p.rsplit("/", 1)[-1] for p in root.parent_disks}
+    dev_names = {dev.name, dev.path.rsplit("/", 1)[-1]}
+    if parents & dev_names:
         return Check("not-system-disk", False, f"{dev.path} backs the running system (/)")
     return Check("not-system-disk", True, f"{dev.path} does not back /")
 

@@ -13,6 +13,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from .config import DEFAULT_PARTS, DEFAULT_QUICK_BYTES, DEFAULT_THERMAL_POLICY, RunConfig
 from .orchestrator import EXIT_REFUSED, RunContext, run
@@ -41,8 +42,23 @@ with --only.
 """
 
 
+class _Parser(argparse.ArgumentParser):
+    """An ArgumentParser that exits usage errors with ``EXIT_REFUSED``.
+
+    argparse's default is exit code 2, which collides with ``EXIT_ATTENTION`` (a
+    run that completed but flagged an issue). A bad invocation is really "refused
+    to run", so map it onto ``EXIT_REFUSED`` (1) - the same bucket as a safety
+    refusal - keeping ``2`` to mean "ran, needs attention". ``--help`` still
+    exits 0 (argparse calls ``exit`` directly for that, not ``error``).
+    """
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_REFUSED, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog=PROG,
         description=DESCRIPTION,
         epilog=EPILOG,

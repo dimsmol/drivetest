@@ -87,6 +87,14 @@ def _ignore_log(_message: str) -> None:
 
 @dataclass(frozen=True)
 class CooldownOutcome:
+    """Result of a cooldown wait.
+
+    ``last_temp`` is the last temperature actually observed during the wait. On a
+    give-up (the cap elapsed while still hot) that sample may be up to one
+    ``cool_interval_s`` old, since the loop sleeps after sampling; callers that
+    need a fresh reading re-sample (as :meth:`ThermalController.prestart_ok` does).
+    """
+
     reached_target: bool
     unreadable: bool
     waited_s: float

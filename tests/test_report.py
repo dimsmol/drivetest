@@ -16,7 +16,7 @@ from drivetest.report import (
     health_regressions,
 )
 from drivetest.smart import SmartInfo, parse_smart_json
-from drivetest.units import GIB
+from drivetest.units import GIB, MIB
 
 from .conftest import load_json
 
@@ -197,6 +197,9 @@ def test_describe_verdict_renders_display_text():
 def test_format_gib():
     assert format_gib(50 * GIB) == "50GiB"
     assert format_gib(0) == "0GiB"
+    # a sub-GiB non-zero span keeps a decimal instead of collapsing to "0GiB"
+    assert format_gib(512 * MIB) == "0.5GiB"
+    assert format_gib(GIB + GIB // 2) == "1.5GiB"
 
 
 def test_logger_tees_to_file(tmp_path, capsys):

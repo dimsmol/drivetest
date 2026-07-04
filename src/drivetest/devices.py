@@ -151,9 +151,15 @@ def list_devices(runner: Runner, *, path: str | None = None) -> list[Device]:
 
 
 def find_device(runner: Runner, path: str) -> Device:
-    """Return the whole-device model for ``path`` (canonicalized first).
+    """Return the block device lsblk reports for ``path`` (canonicalized first).
 
-    Raises ``LookupError`` if lsblk reports nothing for the path.
+    This does *not* assert the node is a whole disk - a partition path resolves
+    to its ``part`` device. That guarantee is enforced downstream by
+    :func:`drivetest.safety.check_whole_disk`; here we only require that lsblk
+    knows the node and reports a size (the target of a write/benchmark must have
+    a real size, which the identity and region math depend on).
+
+    Raises ``LookupError`` if lsblk reports nothing, or no size, for the path.
     """
     real = canonical_path(path)
     devices = list_devices(runner, path=real)
