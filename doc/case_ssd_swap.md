@@ -28,7 +28,7 @@ Pass = write/verify PASS, SMART diff clean, temp stayed under ~70 C.
 
 The Arion is a passive (fanless) enclosure, so a single continuous 2 TB write overheats and the bridge drops off the bus. `--parts 8` paces the write with cooldowns between regions; see [Thermal pacing](../README.md#thermal-pacing-passive-enclosures) in the README. A desk fan on the enclosure helps a lot, and may even let a single un-split `--write` complete.
 
-Because of this thermal limit, the definitive full-speed write+verify is really Stage 2 (internal); the external pass mainly screens for a dead-on-arrival drive.
+Despite the thermal limit, this external pass is the full-drive integrity check: `--parts 8` writes and crc-verifies every cell, just paced with cooldowns. What it can't measure is real NVMe speed (the enclosure caps at ~1 GB/s) - that, plus the M.2 slot itself, is what Stage 2 validates.
 
 ## Stage 2 - internal, in the M.2 slot
 
@@ -36,8 +36,9 @@ Do this at swap time. Fit the SN850X, boot a **Linux live USB**; the drive is no
 
 1. Native health + speed:
    ```bash
-   sudo ./drivetest --write /dev/nvme0n1   # expect ~7000 MB/s seq read
+   sudo ./drivetest --quick --write /dev/nvme0n1   # slot + PCIe write path; expect ~7000 MB/s seq read
    ```
+   Stage 1 already crc-verified a full write across every cell, and integrity is interface-independent (USB vs PCIe doesn't change what's stored). So this pass only needs to prove the things the enclosure couldn't: real NVMe speed and that the M.2 slot/contacts are good. `--quick` does that without spending a second full drive-write of endurance - the extended self-test below re-scans the whole media internally to cover the rest.
 2. Built-in extended self-test (USB bridges can't pass this through):
    ```bash
    sudo nvme device-self-test /dev/nvme0n1 -s 2
