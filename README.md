@@ -8,6 +8,8 @@ The tool is a small dependency-free Python package (`src/drivetest/`, run via th
 
 For a worked end-to-end example - screening a new SSD in a passive USB enclosure, then validating it in an M.2 slot - see [doc/case_ssd_swap.md](doc/case_ssd_swap.md).
 
+> **Don't over-run the write test.** Each `--write` pass writes the whole drive once, spending a small but non-zero slice of its finite write endurance (TBW / flash program-erase cycles). A handful of runs is negligible; running it hundreds of times is a bad idea - you would burn through meaningful lifetime of the very drive you are trying to validate. Screen a drive a few times max, not habitually.
+
 ## Usage
 
 Everything runs as root (SMART and raw device IO need it), so the commands below use `sudo`.
