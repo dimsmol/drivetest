@@ -93,14 +93,25 @@ def check_not_mounted(dev: Device) -> Check:
     return Check("not-mounted", True, f"{dev.path} is not mounted")
 
 
+def _root_established(root: RootInfo) -> bool:
+    """True only if the disk(s) backing ``/`` were positively identified.
+
+    ``resolved`` with an empty ``parent_disks`` is *not* established: the walk
+    returned no physical disk, so there is nothing to compare against and the
+    target cannot be cleared as "not the system disk". Treated as uncertain.
+    """
+    return root.resolved and bool(root.parent_disks)
+
+
 def check_not_system_disk(dev: Device, root: RootInfo) -> Check:
     """Refuse if ``dev`` backs the running system (``/``).
 
-    If the root source could not be resolved to physical disks, this returns a
-    *passing* check whose detail flags the uncertainty - the blank-disk guard is
-    then the backstop (warn rather than silently trust).
+    If the disk backing ``/`` could not be positively established, this returns a
+    *passing* check whose detail flags the uncertainty - but that pass is only
+    safe while the blank-disk guard still blocks, so :func:`evaluate_write_safety`
+    refuses to let ``--force`` downgrade the blank guard in that case.
     """
-    if not root.resolved:
+    if not _root_established(root):
         return Check(
             "not-system-disk",
             True,
@@ -174,8 +185,13 @@ def evaluate_write_safety(
 ) -> list[Check]:
     """Run every pre-write guard and return their results, in order.
 
-    ``force`` downgrades only the blank check from blocking to advisory - it
-    never bypasses the mount, system-disk, whole-disk or serial guards.
+    ``force`` downgrades only the blank check from blocking to advisory, and only
+    when the disk backing ``/`` was positively established (so the system-disk
+    guard - not the blank guard - is what protects ``/``). When the root disk is
+    unresolved, the blank guard is the sole backstop and ``force`` must not
+    remove it, or a forced write on e.g. a ZFS/overlay-root system could target
+    the live system disk. ``force`` never bypasses the mount, system-disk,
+    whole-disk or serial guards.
     """
     checks = [
         check_whole_disk(dev),
@@ -184,7 +200,7 @@ def evaluate_write_safety(
         check_serial_unique(dev, all_serials),
         check_blank(dev, probe),
     ]
-    if force:
+    if force and _root_established(root):
         checks = [
             Check(c.name, True, f"{c.detail} (forced)") if c.name == "blank" and not c.ok else c
             for c in checks

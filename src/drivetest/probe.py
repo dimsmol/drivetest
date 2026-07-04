@@ -22,10 +22,16 @@ def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str = "/sys/bl
     """
     probe_error = False
 
+    dev_sys = os.path.join(sys_block, dev.name)
     try:
-        holders = tuple(sorted(os.listdir(os.path.join(sys_block, dev.name, "holders"))))
+        holders = tuple(sorted(os.listdir(os.path.join(dev_sys, "holders"))))
     except FileNotFoundError:
-        holders = ()  # no holders dir == no holders
+        holders = ()
+        # A real whole disk always has a .../holders dir (empty when unused). If
+        # it - or the device's /sys entry - is missing, /sys is not in the state
+        # we expect: fail closed rather than read the absence as "no holders".
+        if not os.path.isdir(dev_sys):
+            probe_error = True
     except OSError:
         holders = ()
         probe_error = True
@@ -90,4 +96,7 @@ def gather_root_info(runner: Runner) -> RootInfo:
         # We know the source but can't resolve parents; treat as unresolved.
         return RootInfo(source=source, resolved=False)
     parents = tuple(line.strip() for line in walk.stdout.splitlines() if line.strip())
-    return RootInfo(source=source, parent_disks=parents, resolved=True)
+    # An empty walk (lsblk succeeded but named no disk) leaves nothing to compare
+    # the target against, so the root is not actually established - mark it
+    # unresolved so the system-disk guard treats it as uncertain, not clean.
+    return RootInfo(source=source, parent_disks=parents, resolved=bool(parents))

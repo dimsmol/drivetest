@@ -144,7 +144,8 @@ def test_force_downgrades_only_blank():
     dev = _disk(serial="UNIQUE", type="part")  # whole-disk fails
     checks = evaluate_write_safety(
         dev,
-        root=RootInfo(source="/dev/x", parent_disks=()),
+        # An established root that isn't this device: force may downgrade blank.
+        root=RootInfo(source="/dev/nvme0n1p4", parent_disks=("nvme0n1",)),
         probe=BlankProbe(signatures=("ext4",)),  # blank fails
         all_serials=["UNIQUE"],
         force=True,
@@ -153,6 +154,46 @@ def test_force_downgrades_only_blank():
     # blank was forced to pass, but the whole-disk failure still blocks
     assert "blank" not in failures
     assert "whole-disk" in failures
+
+
+def test_force_does_not_downgrade_blank_when_root_unresolved():
+    # With the system disk unresolvable (ZFS/overlay root), the blank guard is
+    # the only thing standing between --force and the live system disk, so force
+    # must NOT downgrade it.
+    dev = _disk(serial="UNIQUE")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="zfs/root", resolved=False),
+        probe=BlankProbe(signatures=("ext4",)),  # non-blank
+        all_serials=["UNIQUE"],
+        force=True,
+    )
+    failures = {c.name for c in blocking_failures(checks)}
+    assert "blank" in failures
+
+
+def test_force_does_not_downgrade_blank_when_root_walk_empty():
+    # resolved=True but no parent disks == not actually established; same risk as
+    # an unresolved root, so force must not downgrade blank here either.
+    dev = _disk(serial="UNIQUE")
+    checks = evaluate_write_safety(
+        dev,
+        root=RootInfo(source="/dev/x", parent_disks=(), resolved=True),
+        probe=BlankProbe(signatures=("ext4",)),
+        all_serials=["UNIQUE"],
+        force=True,
+    )
+    failures = {c.name for c in blocking_failures(checks)}
+    assert "blank" in failures
+
+
+def test_empty_parent_disks_is_uncertain_not_clean():
+    # A resolved root that names no disk cannot clear a target as "not the system
+    # disk"; the guard must flag uncertainty rather than pass cleanly.
+    dev = _disk(name="sda", path="/dev/sda")
+    check = check_not_system_disk(dev, RootInfo(source="/dev/x", parent_disks=(), resolved=True))
+    assert check.ok  # non-blocking, but...
+    assert "cannot resolve" in check.detail  # ...flagged as uncertain, not "does not back /"
 
 
 def test_force_does_not_bypass_mount_or_system_guards():

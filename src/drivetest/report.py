@@ -8,6 +8,7 @@ user saw on screen.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -19,7 +20,7 @@ from .units import GIB
 
 class SmartVerdict(Enum):
     CLEAN = "clean"
-    CHANGED = "CHANGED - health counters worsened"
+    CHANGED = "CHANGED - health worsened"
     UNKNOWN = "unknown (post-run SMART read failed - device may have dropped)"
 
 
@@ -64,15 +65,17 @@ class SmartDelta:
     """A worsened counter between the before/after SMART snapshots."""
 
     field: str
-    before: int | None
-    after: int | None
+    before: int
+    after: int
 
 
 def diff_smart(before: SmartInfo, after: SmartInfo) -> list[SmartDelta]:
     """Return counters that increased (worsened) from ``before`` to ``after``.
 
     Only error/wear counters are compared; a missing value on either side is
-    skipped rather than treated as a change.
+    skipped rather than treated as a change. Non-counter health signals (the
+    self-assessment flag, NVMe critical warning) are handled by
+    :func:`health_regressions`.
     """
     deltas: list[SmartDelta] = []
     for field in SmartInfo.HEALTH_COUNTERS:
@@ -85,15 +88,36 @@ def diff_smart(before: SmartInfo, after: SmartInfo) -> list[SmartDelta]:
     return deltas
 
 
-def classify_smart(after: SmartInfo, deltas: list[SmartDelta]) -> SmartVerdict:
+def health_regressions(before: SmartInfo, after: SmartInfo) -> list[str]:
+    """Health signals that worsened but are not monotonic wear counters.
+
+    A change here is at least as serious as a counter increase, so it must feed
+    the verdict too: the drive's own SMART self-assessment flipping to FAILED, or
+    an NVMe critical-warning flag being raised during the run. Kept out of
+    :func:`diff_smart` because these are a boolean and a bitmask, not counters.
+    """
+    reasons: list[str] = []
+    if before.health_passed is True and after.health_passed is False:
+        reasons.append("SMART self-assessment flipped PASSED -> FAILED")
+    before_cw = before.critical_warning or 0
+    after_cw = after.critical_warning
+    if after_cw is not None and after_cw != 0 and after_cw != before_cw:
+        reasons.append(f"NVMe critical warning raised (0x{after_cw:02x})")
+    return reasons
+
+
+def classify_smart(
+    after: SmartInfo, deltas: list[SmartDelta], regressions: Sequence[str] = ()
+) -> SmartVerdict:
     """Turn the after-snapshot and diff into a verdict.
 
     A post-run report that isn't a real report (device dropped) is UNKNOWN, not
-    clean - an error payload must never be reported as a healthy result.
+    clean - an error payload must never be reported as a healthy result. Any
+    counter delta or non-counter health regression means CHANGED.
     """
     if not after.has_report:
         return SmartVerdict.UNKNOWN
-    if deltas:
+    if deltas or regressions:
         return SmartVerdict.CHANGED
     return SmartVerdict.CLEAN
 

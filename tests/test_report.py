@@ -12,6 +12,7 @@ from drivetest.report import (
     classify_smart,
     diff_smart,
     format_gib,
+    health_regressions,
 )
 from drivetest.smart import SmartInfo, parse_smart_json
 from drivetest.units import GIB
@@ -58,6 +59,33 @@ def test_missing_counter_is_not_a_change():
     before = replace(HEALTHY, media_errors=None)
     after = replace(HEALTHY, media_errors=2)
     assert diff_smart(before, after) == []  # can't compare a missing baseline
+
+
+def test_health_self_assessment_flip_is_a_regression():
+    # SMART overall-health going PASSED -> FAILED is not a counter, but it is a
+    # regression and must make the run CHANGED, not CLEAN.
+    before = replace(HEALTHY, health_passed=True)
+    after = replace(HEALTHY, health_passed=False)
+    assert diff_smart(before, after) == []  # no counter moved
+    regressions = health_regressions(before, after)
+    assert regressions and "FAILED" in regressions[0]
+    assert classify_smart(after, [], regressions) is SmartVerdict.CHANGED
+
+
+def test_nvme_critical_warning_raised_is_a_regression():
+    before = replace(HEALTHY, critical_warning=0)
+    after = replace(HEALTHY, critical_warning=4)
+    regressions = health_regressions(before, after)
+    assert regressions and "critical warning" in regressions[0]
+    assert classify_smart(after, [], regressions) is SmartVerdict.CHANGED
+
+
+def test_stable_health_flags_are_not_a_regression():
+    # Health still PASSED and a pre-existing (unchanged) critical warning are not
+    # new regressions introduced by this run.
+    before = replace(HEALTHY, health_passed=True, critical_warning=2)
+    after = replace(HEALTHY, health_passed=True, critical_warning=2)
+    assert health_regressions(before, after) == []
 
 
 def test_absent_report_is_unknown_not_clean():

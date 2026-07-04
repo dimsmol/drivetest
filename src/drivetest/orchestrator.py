@@ -41,6 +41,7 @@ from .report import (
     classify_smart,
     diff_smart,
     format_gib,
+    health_regressions,
 )
 from .safety import (
     blocking_failures,
@@ -84,6 +85,7 @@ class RunContext:
     confirm: Callable[[str], str] = input
     stream: TextIO | None = None
     stamp: str | None = None
+    sys_block: str = "/sys/block"
 
 
 def run(config: RunConfig, ctx: RunContext | None = None) -> int:
@@ -161,7 +163,18 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     # --- write + verify ---------------------------------------------------
     verify = VerifyOutcome(VerifyStatus.SKIPPED)
     if config.write:
-        verify = _write_phase(config, ctx, dev, logger, thermal, fio_runner, log_dir)
+        try:
+            verify = _write_phase(config, ctx, dev, logger, thermal, fio_runner, log_dir)
+        except (Exception, KeyboardInterrupt) as exc:
+            # The device has been partially written; never exit with a bare
+            # traceback and no verdict. fio itself is already killed by
+            # run_region's finally - here we just report the unfinished state.
+            logger.log("")
+            logger.log(f"!! write phase failed: {exc!r}")
+            logger.log("RESULT: INCOMPLETE - the write was interrupted by an unexpected error "
+                       "after the device was partially written. Cool it, replug, and resume "
+                       "with --only <remaining parts>.")
+            return EXIT_ATTENTION
         logger.log(f"   write/verify: {verify.describe()}")
         logger.log("")
 
@@ -181,7 +194,8 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     # --- SMART after + diff ----------------------------------------------
     after = _smart_after(runner, dev, mode, log_dir / "smart_after.txt", dev_gone)
     deltas = diff_smart(before, after)
-    verdict = classify_smart(after, deltas)
+    regressions = health_regressions(before, after)
+    verdict = classify_smart(after, deltas, regressions)
 
     # --- summary ----------------------------------------------------------
     peak = max(temps) if temps else None
@@ -191,6 +205,8 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
     logger.log(f"SMART diff   : {verdict.value}")
     for d in deltas:
         logger.log(f"   {d.field}: {d.before} -> {d.after}")
+    for r in regressions:
+        logger.log(f"   {r}")
     logger.log(f"full logs    : {log_dir}/")
     logger.log("")
 
@@ -215,7 +231,7 @@ def run(config: RunConfig, ctx: RunContext | None = None) -> int:
 def _guard_and_confirm(config: RunConfig, ctx: RunContext, dev: Device, logger: Logger) -> int:
     """Run the pre-write guards, print failures, and take confirmation."""
     root = gather_root_info(ctx.runner)
-    probe = gather_blank_probe(ctx.runner, dev)
+    probe = gather_blank_probe(ctx.runner, dev, sys_block=ctx.sys_block)
     serials = all_serials(list_devices(ctx.runner))
 
     checks = evaluate_write_safety(
