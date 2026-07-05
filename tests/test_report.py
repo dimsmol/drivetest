@@ -152,6 +152,32 @@ def test_critical_warning_cleared_is_not_a_regression():
     assert health_regressions(before, after) == []
 
 
+def test_critical_warning_partial_clear_is_not_a_regression():
+    # Bits only dropped (0x07 -> 0x03): the mask improved, so it must not be
+    # reported as "raised" - only newly-set bits count.
+    before = replace(HEALTHY, critical_warning=0x07)
+    after = replace(HEALTHY, critical_warning=0x03)
+    assert health_regressions(before, after) == []
+
+
+def test_critical_warning_reports_only_newly_set_bits():
+    # 0x01 -> 0x05 sets bit 0x04 (and keeps 0x01); the message names the new bit,
+    # not the whole post-run value.
+    before = replace(HEALTHY, critical_warning=0x01)
+    after = replace(HEALTHY, critical_warning=0x05)
+    regressions = health_regressions(before, after)
+    assert regressions and "0x04" in regressions[0]
+
+
+def test_multiple_simultaneous_regressions_are_all_reported():
+    before = replace(HEALTHY, health_passed=True, critical_warning=0)
+    after = replace(HEALTHY, health_passed=False, critical_warning=4)
+    regressions = health_regressions(before, after)
+    assert len(regressions) == 2
+    assert any("FAILED" in r for r in regressions)
+    assert any("critical warning" in r for r in regressions)
+
+
 def test_stable_health_flags_are_not_a_regression():
     # Health still PASSED and a pre-existing (unchanged) critical warning are not
     # new regressions introduced by this run.
@@ -170,6 +196,31 @@ def test_absent_report_is_unknown_not_clean():
 def test_real_report_stays_clean_when_unchanged():
     info = parse_smart_json(load_json("smart_nvme.json"))
     assert classify_smart(info, [], []) is SmartVerdict.CLEAN
+
+
+def test_identity_only_report_with_no_health_signal_is_unknown():
+    # A flaky bridge can return identity (model/serial) with no health payload at
+    # all - no self-assessment, no critical warning, no counters. has_report is
+    # True, but there is zero evidence of health, so it must be UNKNOWN, not CLEAN.
+    after = SmartInfo(model="M", serial="S")
+    assert after.has_report
+    assert not after.has_health_signal
+    assert classify_smart(after, [], []) is SmartVerdict.UNKNOWN
+
+
+def test_report_with_a_single_health_signal_can_be_clean():
+    # One usable datum (here the self-assessment) is enough to allow CLEAN.
+    after = SmartInfo(model="M", serial="S", health_passed=True)
+    assert after.has_health_signal
+    assert classify_smart(after, [], []) is SmartVerdict.CLEAN
+
+
+def test_unknown_takes_precedence_over_deltas():
+    # A no-report after-snapshot is UNKNOWN even if deltas/regressions were somehow
+    # computed - an error payload must never be dressed up as CHANGED-but-known.
+    dropped = SmartInfo(raw=None)
+    deltas = diff_smart(HEALTHY, replace(HEALTHY, media_errors=9))
+    assert classify_smart(dropped, deltas, ["x"]) is SmartVerdict.UNKNOWN
 
 
 def test_verify_outcome_needs_attention():
@@ -231,3 +282,14 @@ def test_logger_tees_to_explicit_stream(tmp_path):
     logger.log("world")
     assert summary.read_text() == "hello\nworld\n"
     assert stream.getvalue() == "hello\nworld\n"
+
+
+def test_logger_writes_non_ascii_regardless_of_locale(tmp_path):
+    # The summary file is opened with an explicit UTF-8 encoding, so a non-ASCII
+    # model string never raises UnicodeEncodeError under a C/POSIX-locale root
+    # shell (where the default file encoding would be ASCII).
+    summary = tmp_path / "summary.log"
+    stream = io.StringIO()
+    logger = Logger(summary, stream=stream)
+    logger.log("model: Crucial P3 µ-edition")
+    assert summary.read_text(encoding="utf-8") == "model: Crucial P3 µ-edition\n"

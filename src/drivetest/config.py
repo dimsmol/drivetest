@@ -23,8 +23,11 @@ MINUTE = 60  # seconds in a minute
 # pacing loops.
 DEFAULT_THERMAL_POLICY = ThermalPolicy(
     ceiling_c=75,  # abort a running region at/above this
-    cool_target_c=50,  # cool to this before each region
-    start_max_c=50,  # refuse to start a region above this
+    cool_target_c=45,  # cool to this before each region
+    # Refuse to start a region above this. Kept above cool_target_c on purpose: the
+    # cooldown reaches cool_target and prestart_ok then re-samples, so a small bump
+    # between the two reads (or sensor jitter) must not bounce a just-cooled drive.
+    start_max_c=50,
     cool_max_wait_s=20 * MINUTE,  # never wait longer than this to cool
     poll_interval_s=5.0,  # temperature sampling cadence during a write
     cool_interval_s=20.0,  # sampling cadence while cooling

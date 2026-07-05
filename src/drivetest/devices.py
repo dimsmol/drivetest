@@ -97,7 +97,14 @@ def _clean(value: Any) -> str | None:
     return text or None
 
 
-def _device_from_node(node: dict[str, Any]) -> Device:
+def _device_from_node(node: Any) -> Device:
+    # Each element of blockdevices/children is untrusted JSON: a non-object node
+    # (null, a bare string/number) would make .get raise an opaque AttributeError.
+    # Fail closed explicitly instead, so malformed lsblk output is rejected the
+    # same clean way whether the bad value is at the top level or nested.
+    if not isinstance(node, dict):
+        raise ValueError("lsblk device node is not an object")
+    node = cast("dict[str, Any]", node)
     # Every lsblk device has a name; its absence is malformed output. Requiring it
     # also means the path fallback below is always a real "/dev/<name>", never
     # "/dev/None".

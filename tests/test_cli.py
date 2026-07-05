@@ -25,59 +25,76 @@ def test_write_parts_only():
     assert opts.only == "1-4"
 
 
+def _assert_refused(argv: list[str]) -> None:
+    """A usage error must exit EXIT_REFUSED (1), not argparse's native 2 (which
+    would collide with EXIT_ATTENTION). Asserting the code - not just that some
+    SystemExit fired - keeps these tests honest about *which* contract held.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args(argv)
+    assert excinfo.value.code == EXIT_REFUSED
+
+
 def test_quick_requires_write():
-    with pytest.raises(SystemExit):
-        parse_args(["--quick", "/dev/sdb"])
+    _assert_refused(["--quick", "/dev/sdb"])
 
 
 def test_usage_error_exits_refused_not_two():
     # A bad flag combination exits EXIT_REFUSED (1), not argparse's default 2,
     # so it stays distinguishable from EXIT_ATTENTION (a run that needs attention).
-    with pytest.raises(SystemExit) as excinfo:
-        parse_args(["--quick", "/dev/sdb"])
-    assert excinfo.value.code == EXIT_REFUSED
+    _assert_refused(["--quick", "/dev/sdb"])
 
 
 def test_argparse_native_error_also_exits_refused():
     # Even an argparse-native error (missing positional) maps to EXIT_REFUSED.
-    with pytest.raises(SystemExit) as excinfo:
-        parse_args([])
-    assert excinfo.value.code == EXIT_REFUSED
+    _assert_refused([])
 
 
 def test_only_requires_write():
-    with pytest.raises(SystemExit):
-        parse_args(["--only", "1-4", "/dev/sdb"])
+    _assert_refused(["--only", "1-4", "/dev/sdb"])
 
 
 def test_only_rejects_quick_combo():
-    with pytest.raises(SystemExit):
-        parse_args(["--write", "--quick", "--only", "1", "/dev/sdb"])
+    _assert_refused(["--write", "--quick", "--only", "1", "/dev/sdb"])
+
+
+def test_only_requires_explicit_parts():
+    # --only without --parts would default parts to 1 and silently accept "--only 1"
+    # as a single continuous full-drive write - defeating the paced resume the flag
+    # exists for. It must be rejected, not quietly run unpaced.
+    _assert_refused(["--write", "--only", "1", "/dev/sdb"])
+
+
+def test_only_with_explicit_parts_is_accepted():
+    opts = parse_args(["--write", "--parts", "4", "--only", "1-2", "/dev/sdb"])
+    assert opts.parts == 4 and opts.only == "1-2"
+
+
+def test_malformed_only_spec_exits_refused():
+    # A malformed --only token reaches parse_only_spec, whose ValueError is remapped
+    # to a usage error (EXIT_REFUSED), not a bare traceback.
+    _assert_refused(["--write", "--parts", "4", "--only", "abc", "/dev/sdb"])
 
 
 def test_only_spec_validated_against_parts():
-    with pytest.raises(SystemExit):
-        parse_args(["--write", "--parts", "4", "--only", "5", "/dev/sdb"])
+    _assert_refused(["--write", "--parts", "4", "--only", "5", "/dev/sdb"])
 
 
 def test_parts_must_be_positive():
-    with pytest.raises(SystemExit):
-        parse_args(["--write", "--parts", "0", "/dev/sdb"])
+    _assert_refused(["--write", "--parts", "0", "/dev/sdb"])
 
 
 def test_parts_requires_write():
     # --parts only paces the write pass; it's meaningless (and silently ignored)
     # without --write.
-    with pytest.raises(SystemExit):
-        parse_args(["--parts", "8", "/dev/sdb"])
+    _assert_refused(["--parts", "8", "/dev/sdb"])
 
 
 def test_explicit_default_parts_still_requires_write():
     # Even --parts 1 (equal to the default value) is rejected without --write, so
     # the "requires --write" rule applies to any *explicit* --parts and doesn't
     # silently depend on the default happening to be 1.
-    with pytest.raises(SystemExit):
-        parse_args(["--parts", "1", "/dev/sdb"])
+    _assert_refused(["--parts", "1", "/dev/sdb"])
 
 
 def test_omitted_parts_defaults_to_one():
@@ -87,8 +104,7 @@ def test_omitted_parts_defaults_to_one():
 
 def test_parts_rejected_with_quick():
     # --quick writes a single region, so --parts would be silently discarded.
-    with pytest.raises(SystemExit):
-        parse_args(["--write", "--quick", "--parts", "8", "/dev/sdb"])
+    _assert_refused(["--write", "--quick", "--parts", "8", "/dev/sdb"])
 
 
 def test_write_force_quick_flags_map_into_config():
@@ -99,13 +115,11 @@ def test_write_force_quick_flags_map_into_config():
 
 
 def test_force_requires_write():
-    with pytest.raises(SystemExit):
-        parse_args(["--force", "/dev/sdb"])
+    _assert_refused(["--force", "/dev/sdb"])
 
 
 def test_device_required():
-    with pytest.raises(SystemExit):
-        parse_args([])
+    _assert_refused([])
 
 
 def test_assume_yes_and_log_dir():

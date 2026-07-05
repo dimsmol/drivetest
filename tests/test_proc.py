@@ -65,6 +65,41 @@ def test_empty_argv_raises_tool_not_found():
         SubprocessRunner().run([])
 
 
+def test_non_executable_tool_raises_tool_not_found(tmp_path):
+    # A file that exists but isn't executable raises PermissionError (EACCES) from
+    # exec, not FileNotFoundError. It must still translate to ToolNotFound so an
+    # unusable tool fails closed exactly like a missing one.
+    tool = tmp_path / "not_exec"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o644)  # readable but not executable
+    with pytest.raises(ToolNotFound):
+        SubprocessRunner().run([str(tool)])
+
+
+def test_bad_path_component_raises_tool_not_found():
+    # A path whose parent is a file, not a directory, raises NotADirectoryError
+    # (ENOTDIR) - another OSError subclass that must map to ToolNotFound.
+    with pytest.raises(ToolNotFound):
+        SubprocessRunner().run(["/etc/hostname/nope"])
+
+
+def test_run_json_forwards_timeout_to_runner():
+    # run_json must pass its timeout through to the runner (not silently drop it).
+    runner = FakeRunner()
+    runner.add("smartctl", stdout='{"a": 1}')
+    run_json(runner, ["smartctl", "--json"], timeout=5)
+    assert runner.calls[-1].timeout == 5
+
+
+def test_stdin_is_forwarded_to_the_process():
+    # SubprocessRunner forwards input= to the process's stdin.
+    result = SubprocessRunner().run(
+        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+        input="ping",
+    )
+    assert result.stdout == "ping"
+
+
 def test_stderr_is_captured():
     result = SubprocessRunner().run(
         [sys.executable, "-c", "import sys; sys.stderr.write('warn'); sys.exit(0)"]

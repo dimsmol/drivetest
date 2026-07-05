@@ -36,6 +36,12 @@ def test_parse_nested_children_and_mountpoints():
     assert set(dev.all_mountpoints) == {"/boot", "/"}
     # walk yields the disk plus both partitions
     assert [d.name for d in dev.walk()] == ["nvme0n1", "nvme0n1p1", "nvme0n1p4"]
+    # wwn/tran are part of the identity fingerprint used to detect a USB replug, so
+    # assert they are positively extracted (not silently always-None).
+    assert dev.wwn == "eui.0025388801b4d8f7"
+    assert dev.tran == "nvme"
+    # a partition child is not a whole disk (the write guard keys off is_disk)
+    assert not dev.children[0].is_disk
 
 
 def test_identity_fingerprint_is_stable_and_distinct():
@@ -114,6 +120,33 @@ def test_parse_lsblk_rejects_non_object():
 def test_parse_lsblk_rejects_non_json():
     with pytest.raises(json.JSONDecodeError):
         parse_lsblk("not json at all")
+
+
+def test_parse_lsblk_rejects_non_object_device_node():
+    # A device node that isn't an object (null, a bare string) would make .get
+    # raise an opaque AttributeError; fail closed explicitly as ValueError instead.
+    with pytest.raises(ValueError):
+        parse_lsblk({"blockdevices": [None]})
+    with pytest.raises(ValueError):
+        parse_lsblk({"blockdevices": ["sda"]})
+
+
+def test_parse_lsblk_rejects_non_object_child_node():
+    # The same guard applies to a nested child, not just top-level nodes.
+    with pytest.raises(ValueError):
+        parse_lsblk(
+            {"blockdevices": [
+                {"name": "sda", "type": "disk", "size": 100, "children": [None]}
+            ]}
+        )
+
+
+def test_parse_lsblk_rejects_node_without_name():
+    # A missing name is malformed lsblk output; requiring it keeps the path
+    # fallback a real "/dev/<name>", never "/dev/None". This fail-closed guard is
+    # load-bearing, so pin it.
+    with pytest.raises(ValueError):
+        parse_lsblk({"blockdevices": [{"type": "disk", "size": 100}]})
 
 
 def test_parse_lsblk_empty_when_no_blockdevices():

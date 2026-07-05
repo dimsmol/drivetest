@@ -125,6 +125,12 @@ def parse_args(argv: list[str]) -> RunConfig:
     if ns.only is not None:
         if not (ns.write and not ns.quick):
             parser.error("--only requires --write without --quick")
+        # --only selects parts out of the N-part geometry, which only exists once
+        # --parts is set. Defaulting parts to 1 here would silently accept
+        # "--only 1" as a single continuous full-drive write - defeating the paced
+        # resume the flag exists for. Require the same --parts used originally.
+        if ns.parts is None:
+            parser.error("--only requires an explicit --parts N (region geometry depends on it)")
         try:
             parse_only_spec(ns.only, parts)
         except ValueError as exc:

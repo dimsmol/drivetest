@@ -201,10 +201,29 @@ def test_read_temperature_nvme_json_kelvin(fake_runner: FakeRunner):
 
 
 def test_read_temperature_rejects_out_of_range(fake_runner: FakeRunner):
-    # A Kelvin reading that converts to above the plausibility ceiling -> None.
+    # An nvme reading above the plausibility ceiling is rejected; with no usable
+    # smartctl fallback either, the result is None.
     too_hot_k = MAX_PLAUSIBLE_TEMP_C + KELVIN_OFFSET + 50
     fake_runner.add("nvme", contains=["smart-log"], stdout=f'{{"temperature": {too_hot_k}}}')
+    fake_runner.add("smartctl", contains=["--json"], stdout='{"model_name": "M"}')
     assert read_temperature(fake_runner, "/dev/nvme0n1", []) is None
+
+
+def test_read_temperature_implausible_nvme_falls_back_to_smartctl(fake_runner: FakeRunner):
+    # An implausible nvme reading must not suppress the smartctl fallback: a garbage
+    # bridge value from nvme still lets a good smartctl reading through.
+    too_hot_k = MAX_PLAUSIBLE_TEMP_C + KELVIN_OFFSET + 50
+    fake_runner.add("nvme", contains=["smart-log"], stdout=f'{{"temperature": {too_hot_k}}}')
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
+
+
+def test_read_temperature_nvme_non_object_json_falls_back(fake_runner: FakeRunner):
+    # nvme exits 0 but prints valid-but-non-object JSON (null): .get would raise, so
+    # the nvme branch must fail closed to the smartctl fallback, not propagate.
+    fake_runner.add("nvme", contains=["smart-log"], stdout="null")
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
 
 
 @pytest.mark.parametrize(
@@ -219,6 +238,9 @@ def test_read_temperature_rejects_out_of_range(fake_runner: FakeRunner):
 def test_read_temperature_plausibility_bounds(fake_runner: FakeRunner, celsius, accepted):
     kelvin = celsius + KELVIN_OFFSET
     fake_runner.add("nvme", contains=["smart-log"], stdout=f'{{"temperature": {kelvin}}}')
+    # A rejected nvme reading falls back to smartctl; register a report with no
+    # temperature so the fallback also yields None and the bound is what's tested.
+    fake_runner.add("smartctl", contains=["--json"], stdout='{"model_name": "M"}')
     result = read_temperature(fake_runner, "/dev/nvme0n1", [])
     assert result == (celsius if accepted else None)
 

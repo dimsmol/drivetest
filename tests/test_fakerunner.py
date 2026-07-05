@@ -41,6 +41,16 @@ def test_rule_can_raise_to_simulate_a_timeout():
         runner.run(["fio", "--name", "wr"], timeout=5.0)
 
 
+def test_rule_can_raise_oserror_to_simulate_a_non_executable_tool():
+    # A non-executable tool raises PermissionError (an OSError subclass) from the
+    # real runner and is translated to ToolNotFound; the fake must mirror that, so
+    # higher-layer tests see the same type production does.
+    runner = FakeRunner()
+    runner.add("smartctl", contains=["-x"], error=PermissionError("smartctl"))
+    with pytest.raises(ToolNotFound):
+        runner.run(["smartctl", "-x", "/dev/sda"])
+
+
 def test_rules_tried_in_registration_order():
     runner = FakeRunner()
     runner.add("smartctl", contains=["-i", "sat"], stdout="specific")

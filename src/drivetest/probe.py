@@ -9,7 +9,7 @@ build a :class:`~drivetest.safety.BlankProbe` and
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from .devices import Device
 from .proc import Runner
@@ -22,20 +22,30 @@ def gather_blank_probe(runner: Runner, dev: Device, *, sys_block: str) -> BlankP
     """
     probe_error = False
 
-    dev_sys = os.path.join(sys_block, dev.name)
-    try:
-        holders = tuple(sorted(os.listdir(os.path.join(dev_sys, "holders"))))
-    except FileNotFoundError:
-        holders = ()
-        # A real whole disk always has a .../holders dir (empty when unused). If
-        # it - or the device's /sys entry - is missing, /sys is not in the state
-        # we expect: fail closed rather than read the absence as "no holders".
-        # (Either the device's /sys entry or the holders/ subdir being absent
-        # raises FileNotFoundError; both are unexpected, so both fail closed.)
-        probe_error = True
-    except OSError:
-        holders = ()
-        probe_error = True
+    # Holders live at /sys/block/<disk>/holders for the whole disk and at
+    # /sys/block/<disk>/<part>/holders for each partition. A holder on a
+    # *partition* (an assembled md member, an open LUKS mapping, or an active LVM
+    # PV on that partition) is exactly what --force must not wave past, yet it does
+    # not appear in the whole-disk holders/ - so aggregate across the disk and its
+    # partitions, not the disk alone.
+    disk_sys = os.path.join(sys_block, dev.name)
+    holder_dirs = [os.path.join(disk_sys, "holders")]
+    holder_dirs += [
+        os.path.join(disk_sys, child.name, "holders")
+        for child in dev.children
+        if child.type == "part"
+    ]
+    found_holders: list[str] = []
+    for holder_dir in holder_dirs:
+        try:
+            found_holders.extend(os.listdir(holder_dir))
+        except OSError:
+            # A real whole disk (and each of its partitions) always has a holders/
+            # dir, empty when unused. If it - or the device's /sys entry - is
+            # missing or unreadable, /sys is not in the state we expect: fail
+            # closed rather than read the absence as "no holders".
+            probe_error = True
+    holders = tuple(sorted(found_holders))
 
     signatures: tuple[str, ...] = ()
     result = runner.run(["wipefs", "-n", "-J", dev.path])
@@ -78,14 +88,18 @@ def gather_root_info(runner: Runner) -> RootInfo:
         return RootInfo(source=None, parent_disks=(), resolved=False)
     try:
         data: dict[str, Any] = result.json()
-        filesystems: list[Any] = data.get("filesystems") or []
+        filesystems: Any = data.get("filesystems")
     # AttributeError/TypeError guard valid-but-non-object JSON; fail closed.
     except (ValueError, AttributeError, TypeError):
         return RootInfo(source=None, parent_disks=(), resolved=False)
-    if not filesystems:
+    # Fail closed on any malformed shape: a non-list "filesystems", an empty list,
+    # or a non-object first entry. The nested cases matter as much as the top-level
+    # one - reaching into a bad payload here must not crash past the guard above.
+    if not isinstance(filesystems, list) or not filesystems:
         return RootInfo(source=None, parent_disks=(), resolved=False)
-
-    first: dict[str, Any] = filesystems[0] or {}
+    if not isinstance(filesystems[0], dict):
+        return RootInfo(source=None, parent_disks=(), resolved=False)
+    first = cast("dict[str, Any]", filesystems[0])
     raw_source = first.get("source")
     if not raw_source:
         return RootInfo(source=None, parent_disks=(), resolved=False)

@@ -20,7 +20,9 @@ POLICY = DEFAULT_THERMAL_POLICY
 
 
 def test_default_policy_satisfies_ordering_invariant():
-    assert POLICY.cool_target_c <= POLICY.start_max_c < POLICY.ceiling_c
+    # The default keeps headroom between the cool target and the start gate (strict
+    # <), so a small re-sample bump after cooling doesn't refuse to start a region.
+    assert POLICY.cool_target_c < POLICY.start_max_c < POLICY.ceiling_c
 
 
 def test_thermal_policy_rejects_bad_ordering():
@@ -89,6 +91,8 @@ def test_cooldown_stops_when_target_reached():
     assert outcome.last_temp == COOL
     # slept after each hot sample, not after reaching COOL
     assert len(slept) == 2
+    # the reported wait is exactly the two hot intervals (no over/under-count)
+    assert outcome.waited_s == 2 * POLICY.cool_interval_s
 
 
 def test_cooldown_pauses_once_when_unreadable():
@@ -120,6 +124,18 @@ def test_cooldown_gives_up_after_max_wait():
     outcome = ctrl.cooldown()
     assert not outcome.reached_target
     assert outcome.waited_s == 60  # 3 intervals of 20s
+    assert outcome.last_temp == HOT  # the last observed (still-hot) sample
+
+
+def test_cooldown_cap_smaller_than_interval_trims_the_single_pause():
+    # cap 10 < interval 20: the one and only pause is trimmed to the whole cap, so
+    # the loop still makes progress and reports exactly the cap, never overshooting.
+    policy = replace(DEFAULT_THERMAL_POLICY, cool_max_wait_s=10, cool_interval_s=20)
+    ctrl, slept = _controller([HOT] * 100, policy)
+    outcome = ctrl.cooldown()
+    assert not outcome.reached_target
+    assert outcome.waited_s == 10
+    assert slept == [10]
 
 
 def test_cooldown_caps_total_wait_when_not_a_multiple():

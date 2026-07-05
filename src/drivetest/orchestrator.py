@@ -15,6 +15,7 @@ drive"), since the exit code alone can't distinguish a subset pass from a full o
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from collections.abc import Callable
@@ -178,35 +179,56 @@ def run(config: RunConfig, ctx: RunContext) -> int:
             # The device has been partially written; never exit with a bare
             # traceback and no verdict. fio itself is already killed by
             # run_region's finally - here we just report the unfinished state.
-            logger.log("")
-            logger.log(f"!! write phase failed: {exc!r}")
-            logger.log("RESULT: INCOMPLETE - the write was interrupted by an unexpected error "
-                       "after the device was partially written. Cool it, replug, and resume "
-                       "with --only <remaining parts>.")
+            # Log best-effort: if the failure *is* the log write, a raising
+            # logger.log must not turn this into a bare-traceback exit 1.
+            _safe_log(logger, "")
+            _safe_log(logger, f"!! write phase failed: {exc!r}")
+            _safe_log(logger, "RESULT: INCOMPLETE - the write was interrupted by an unexpected "
+                      "error after the device was partially written. Cool it, replug, and resume "
+                      "with --only <remaining parts>.")
             return EXIT_ATTENTION
-        logger.log(f"   write/verify: {verify.describe()}")
-        logger.log("")
 
     # --- post-write reporting: survival, benchmarks, SMART diff, summary --
     # Once the destructive write has run, an unexpected error below (e.g. a failed
     # log write, or fio/smartctl vanishing) must not escape as a bare traceback
     # and exit 1 - the contract reserves 1 for "refused, nothing written". Report
-    # attention instead so the operator knows the device *was* written.
+    # attention instead so the operator knows the device *was* written. The
+    # write/verify line is logged inside this guard too, so a log failure there is
+    # caught rather than escaping between the two guards.
     try:
+        if config.write:
+            logger.log(f"   write/verify: {verify.describe()}")
+            logger.log("")
         return _report_and_finish(
             config, runner, dev, mode, logger, log_dir, before, verify, temps
         )
     except (Exception, KeyboardInterrupt) as exc:
         if not config.write:
             raise
-        logger.log("")
-        logger.log(f"!! post-write reporting failed: {exc!r}")
-        logger.log("RESULT: INCOMPLETE - the device was written but the run could not finish "
-                   "reporting. Inspect the logs above and re-check SMART manually.")
+        _safe_log(logger, "")
+        _safe_log(logger, f"!! post-write reporting failed: {exc!r}")
+        _safe_log(logger, "RESULT: INCOMPLETE - the device was written but the run could not "
+                  "finish reporting. Inspect the logs above and re-check SMART manually.")
         return EXIT_ATTENTION
 
 
 # --- helpers --------------------------------------------------------------
+
+
+def _safe_log(logger: Logger, message: str) -> None:
+    """Log for the post-write recovery paths without ever raising.
+
+    Those handlers run after the device was written and must return
+    EXIT_ATTENTION. If the very failure they are reporting is the log write (a
+    full log disk), a plain ``logger.log`` would raise again and escape ``run``
+    as exit 1 ("refused, nothing written") - the worst possible misreport. Fall
+    back to stderr and, if even that fails, swallow it.
+    """
+    try:
+        logger.log(message)
+    except Exception:
+        with contextlib.suppress(Exception):
+            print(message, file=sys.stderr)
 
 
 def _guard_and_confirm(config: RunConfig, ctx: RunContext, dev: Device, logger: Logger) -> int:
@@ -271,7 +293,10 @@ def _write_phase(
 ) -> VerifyOutcome:
     """Run the quick or paced full write+verify."""
     if config.quick:
-        region = quick_region(config.quick_bytes)
+        # Clamp to the device so a small target verifies its whole span instead of
+        # asking fio to write past the end (a spurious FAIL) - the quick default is
+        # a fixed size chosen for large drives.
+        region = quick_region(min(config.quick_bytes, dev.size_bytes))
         logger.log(f">> write+verify (crc32c, first {format_gib(region.size)} quick); "
                    f"ceiling {config.policy.ceiling_c} C")
         if thermal.prestart_ok():
@@ -436,7 +461,15 @@ def _read_benchmarks(runner: Runner, dev: Device, logger: Logger, log_dir: Path)
             read_error = True
             continue
         except ValueError:
-            logger.log("   (could not parse fio output)")
+            # No parseable JSON. If fio also exited non-zero, the read itself
+            # failed (e.g. it bailed on an unreadable sector before emitting a
+            # report) - flag attention rather than bury it as a parse hiccup.
+            if not result.ok:
+                logger.log(f"   !! read error: fio exited {result.returncode} with no "
+                           "parseable output - possible unreadable sectors")
+                read_error = True
+            else:
+                logger.log("   (could not parse fio output)")
             continue
         if kind is ReadKind.SEQ:
             logger.log(f"   bandwidth: {stats.bw_mb:.0f} MB/s")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 
 import pytest
 
@@ -27,6 +28,7 @@ from drivetest.orchestrator import (
     run,
 )
 from drivetest.proc import Result
+from drivetest.units import GIB
 
 from .conftest import FakeRunner, load_text
 
@@ -123,6 +125,14 @@ def test_device_not_found(tmp_path):
     assert code == EXIT_REFUSED
 
 
+def test_run_refuses_when_required_tools_missing(tmp_path, monkeypatch):
+    # Missing a required binary refuses the run up front (EXIT_REFUSED), before the
+    # device is even resolved. Overrides the autouse "no missing tools" fixture.
+    monkeypatch.setattr("drivetest.orchestrator.missing_tools", lambda required: ["fio"])
+    code = run(_config("/dev/sda"), _ctx(FakeRunner(), tmp_path))
+    assert code == EXIT_REFUSED
+
+
 class _SequencedSmartRunner(FakeRunner):
     """A FakeRunner whose ``smartctl --json`` calls return a scripted sequence,
     so the before/after health snapshots can differ.
@@ -178,6 +188,42 @@ def test_readonly_read_benchmark_io_error_is_attention(tmp_path):
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "read error" in summary
     assert "unreadable sectors" in summary
+
+
+def test_readonly_read_benchmark_hard_failure_is_attention(tmp_path):
+    # fio exits non-zero and emits no parseable JSON (it bailed on an unreadable
+    # sector before printing a report). This must still be flagged ATTENTION, not
+    # silently downgraded to a "could not parse" note that would exit OK.
+    runner = FakeRunner()
+    runner.add("lsblk", contains=["-Jb"], stdout=load_text("lsblk_usb_sda.json"))
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    runner.add("fio", contains=["seqread"], stdout="fio: I/O error", returncode=1)
+    runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
+
+    code = run(_config("/dev/sda"), _ctx(runner, tmp_path))
+    assert code == EXIT_ATTENTION
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "read error" in summary
+    assert "unreadable sectors" in summary
+
+
+def test_readonly_unparseable_read_with_zero_exit_is_not_attention(tmp_path):
+    # The counterpart: garbage output but fio exited 0 (a benign parse hiccup, not a
+    # read failure) stays a note and does not by itself raise the run to ATTENTION.
+    runner = FakeRunner()
+    runner.add("lsblk", contains=["-Jb"], stdout=load_text("lsblk_usb_sda.json"))
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    runner.add("fio", contains=["seqread"], stdout="not json", returncode=0)
+    runner.add("fio", contains=["randread"], stdout="not json", returncode=0)
+
+    code = run(_config("/dev/sda"), _ctx(runner, tmp_path))
+    assert code == EXIT_OK
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "could not parse fio output" in summary
 
 
 # --- destructive write paths ----------------------------------------------
@@ -247,6 +293,51 @@ def test_write_happy_path_passes(tmp_path):
     assert "write/verify : PASS" in summary
 
 
+def test_write_refused_on_serial_mismatch_confirmation(tmp_path):
+    # All guards pass, but the interactive confirmation gets the wrong serial: the
+    # write is refused and fio is never launched. Exercises the human-confirm path
+    # (the other write tests use assume_yes=True and skip it).
+    runner = _write_runner()
+    popen_calls = []
+    ctx = _ctx(
+        runner, tmp_path,
+        confirm=lambda _p: "WRONG-SERIAL",
+        popen=lambda argv: popen_calls.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=False), ctx)
+    assert code == EXIT_REFUSED
+    assert popen_calls == []  # never started a write
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "aborted (serial mismatch" in summary
+
+
+def test_write_aborts_when_device_vanishes_before_write(tmp_path):
+    # The node disappears between confirmation and the pre-write re-check: abort
+    # with "device vanished", refusing the write; fio must never launch.
+    original = load_text("lsblk_usb_sda.json")
+    gone = '{"blockdevices": []}'
+    # -Jb calls: find_device, list_devices (serials), then the re-check (gone).
+    runner = _LsblkSequenceRunner([original, original, gone])
+    runner.add("lsblk", contains=["-nrso"], stdout="nvme0n1p4\nnvme0n1\n")
+    runner.add("findmnt", stdout='{"filesystems": [{"source": "/dev/nvme0n1p4", "target": "/"}]}')
+    runner.add("wipefs", stdout='{"signatures": []}')
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    popen_calls = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: popen_calls.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_REFUSED
+    assert popen_calls == []  # never started a write
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "device vanished after confirmation" in summary
+
+
 def test_write_fio_verify_failure_is_attention(tmp_path):
     # fio exits non-zero (a verify mismatch) -> FAIL -> ATTENTION.
     runner = _write_runner()
@@ -299,6 +390,43 @@ def test_post_write_reporting_error_reports_incomplete_not_refused(tmp_path, mon
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "post-write reporting failed" in summary
     assert "device was written" in summary
+
+
+def test_safe_log_never_raises_and_falls_back_to_stderr(capsys):
+    # The recovery helper must swallow a raising logger and fall back to stderr, so
+    # a failing log write can't turn a post-write recovery into an exit-1 traceback.
+    from drivetest.orchestrator import _safe_log
+
+    class _BoomLogger:
+        def log(self, message: str) -> None:
+            raise OSError("log disk full")
+
+    _safe_log(_BoomLogger(), "recovery note")  # type: ignore[arg-type]  # test double
+    assert "recovery note" in capsys.readouterr().err
+
+
+def test_post_write_recovery_survives_a_failing_logger(tmp_path, monkeypatch, capsys):
+    # The worst case the recovery guard exists for: the post-write failure *is* the
+    # log write (the log volume vanished). The recovery must still return ATTENTION
+    # - never let a raising logger.log escape run() as exit 1 - and fall back to
+    # stderr rather than crash.
+    log_root = tmp_path / "drive_test_TAD0NT005915_TEST"
+
+    def boom(_runner, _dev, _logger, _log_dir):
+        shutil.rmtree(log_root)  # the log directory disappears mid-run...
+        raise OSError("log volume disappeared")  # ...and then reporting fails
+
+    monkeypatch.setattr("drivetest.orchestrator._read_benchmarks", boom)
+    runner = _write_runner()
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda _argv: _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_ATTENTION  # not EXIT_REFUSED, despite the logger failing too
+    # the recovery message could not be written to the (gone) log, so it went to stderr
+    assert "post-write reporting failed" in capsys.readouterr().err
 
 
 class _LsblkSequenceRunner(FakeRunner):
@@ -425,6 +553,36 @@ def test_write_quick_mode_runs_a_single_region(tmp_path):
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "quick" in summary
     assert "write/verify : PASS" in summary
+
+
+def test_write_quick_clamps_region_to_a_small_device(tmp_path):
+    # The quick span is a fixed size chosen for large drives; on a device smaller
+    # than that it must clamp to the device size, not ask fio to write past the end.
+    small_size = 10 * GIB
+    small = json.loads(load_text("lsblk_usb_sda.json"))
+    small["blockdevices"][0]["size"] = small_size
+    runner = FakeRunner()
+    runner.add("lsblk", contains=["-nrso"], stdout="nvme0n1p4\nnvme0n1\n")
+    runner.add("lsblk", contains=["-Jb"], stdout=json.dumps(small))
+    runner.add("findmnt", stdout='{"filesystems": [{"source": "/dev/nvme0n1p4", "target": "/"}]}')
+    runner.add("wipefs", stdout='{"signatures": []}')
+    runner.add("smartctl", contains=["-i"], returncode=0)
+    runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    runner.add("smartctl", contains=["-x"], stdout="Serial Number: 255106803016")
+    runner.add("fio", contains=["seqread"], stdout=load_text("fio_seqread.json"))
+    runner.add("fio", contains=["randread"], stdout=load_text("fio_randread.json"))
+
+    launched: list[list[str]] = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: launched.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True, quick=True), ctx)
+    assert code == EXIT_OK
+    [argv] = launched
+    # the region is clamped to the whole small device, not the 50 GiB quick default
+    assert f"--size={small_size}" in argv
 
 
 def test_write_aborts_when_device_mounted_at_recheck(tmp_path):

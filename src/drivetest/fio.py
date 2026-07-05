@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 from .planning import Region
 from .thermal import Temp, ThermalPolicy, exceeds_ceiling
@@ -158,18 +158,25 @@ class FioReadError(ValueError):
     """
 
 
-def parse_read_json(obj: dict[str, Any], kind: ReadKind) -> ReadStats:
+def parse_read_json(obj: Any, kind: ReadKind) -> ReadStats:
     """Extract bandwidth and IOPS from fio's JSON for a read job.
 
     Raises :class:`FioReadError` if the job failed (non-zero ``error``), or a
-    plain ``ValueError`` if the numbers are absent: a missing figure means the
+    plain ``ValueError`` if the output is malformed (not an object, no jobs, a
+    non-object job) or the numbers are absent: a missing figure means the
     benchmark did not produce a result, which must not be reported as a genuine
-    0 B/s.
+    0 B/s. Failing closed as ``ValueError`` (not a bare ``AttributeError``) keeps
+    it inside the caller's ``except ValueError`` net.
     """
-    jobs: list[Any] = obj.get("jobs") or []
+    if not isinstance(obj, dict):
+        raise ValueError("fio JSON is not an object")
+    top = cast("dict[str, Any]", obj)
+    jobs: list[Any] = top.get("jobs") or []
     if not jobs:
         raise ValueError("fio JSON has no jobs")
-    job: dict[str, Any] = jobs[0] or {}
+    if not isinstance(jobs[0], dict):
+        raise ValueError("fio JSON job is not an object")
+    job = cast("dict[str, Any]", jobs[0])
     if job.get("error"):
         raise FioReadError(f"fio read job reported error {job['error']}")
     read: dict[str, Any] = job.get("read") or {}
@@ -326,3 +333,7 @@ class FioRunner:
             proc.wait(timeout=TERMINATE_GRACE_S)
         except subprocess.TimeoutExpired:
             proc.kill()
+            # Reap the killed process so it can't linger as a zombie on the paths
+            # where run_region does not wait() again (e.g. termination from the
+            # exception-cleanup finally rather than the normal overheat path).
+            proc.wait()

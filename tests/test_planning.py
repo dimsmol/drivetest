@@ -53,6 +53,23 @@ def test_part_size_matches_shell_arithmetic():
     assert regions[-1].size == dev - 3 * expected_part
 
 
+def test_final_region_is_never_a_runt():
+    # The final region absorbs the remainder, so it is always at least as large as
+    # an interior part - never a tiny leftover. Guard this against a regression that
+    # spread the remainder wrongly.
+    for dev, parts in [(2000398934016, 8), (100 * MIB + 12345, 4), (7 * MIB + 1, 3)]:
+        regions = plan_regions(dev, parts)
+        assert regions[-1].size >= regions[0].size
+
+
+def test_smallest_valid_multi_part_device():
+    # Exactly one whole MiB per part is the smallest device that can split: each
+    # interior part is 1 MiB and the tiling is still exact.
+    regions = plan_regions(2 * MIB, 2)
+    assert regions[0].size == MIB
+    assert regions[-1].end == 2 * MIB
+
+
 def test_plan_regions_rejects_bad_input():
     with pytest.raises(ValueError):
         plan_regions(1000, 0)

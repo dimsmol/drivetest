@@ -134,8 +134,13 @@ def health_regressions(before: SmartInfo, after: SmartInfo) -> list[str]:
             reasons.append("SMART self-assessment reports FAILED")
     before_cw = before.critical_warning or 0
     after_cw = after.critical_warning
-    if after_cw is not None and after_cw != 0 and after_cw != before_cw:
-        reasons.append(f"NVMe critical warning raised (0x{after_cw:02x})")
+    if after_cw is not None:
+        # Report only bits that were newly *set* during the run. Comparing the raw
+        # value would also flag a pure clear (e.g. 0x07 -> 0x03) as "raised", which
+        # is wrong: a warning bitmask that only dropped bits improved, not worsened.
+        newly_set = after_cw & ~before_cw
+        if newly_set:
+            reasons.append(f"NVMe critical warning raised (0x{newly_set:02x})")
     return reasons
 
 
@@ -146,7 +151,10 @@ def classify_smart(
 
     A post-run report that isn't a real report (device dropped) is UNKNOWN, not
     clean - an error payload must never be reported as a healthy result. Any
-    counter delta or non-counter health regression means CHANGED.
+    counter delta or non-counter health regression means CHANGED. A report that
+    identifies the device but carries *no* health signal at all (a flaky bridge
+    that returned identity only) is UNKNOWN too, not CLEAN - "answered but told us
+    nothing" is not a clean bill of health.
 
     ``regressions`` is required (no default): it is the only channel for
     non-counter regressions such as a raised NVMe critical warning, so a caller
@@ -156,6 +164,8 @@ def classify_smart(
         return SmartVerdict.UNKNOWN
     if deltas or regressions:
         return SmartVerdict.CHANGED
+    if not after.has_health_signal:
+        return SmartVerdict.UNKNOWN
     return SmartVerdict.CLEAN
 
 
@@ -171,7 +181,7 @@ class Logger:
             print(message, file=self._stream)
         else:
             print(message)
-        with open(self._path, "a") as fh:
+        with open(self._path, "a", encoding="utf-8") as fh:
             fh.write(message + "\n")
 
 

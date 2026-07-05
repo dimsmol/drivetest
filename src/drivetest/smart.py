@@ -84,6 +84,21 @@ class SmartInfo:
         """
         return bool(self.model or self.serial)
 
+    @property
+    def has_health_signal(self) -> bool:
+        """True if the report carries at least one usable health datum.
+
+        ``has_report`` only means the device identified itself; a flaky bridge can
+        return identity with *no* health payload at all (no self-assessment, no
+        NVMe critical warning, no counters). Classifying that CLEAN would read
+        "answered but told us nothing" as healthy, so the verdict logic requires a
+        real signal - the self-assessment, the critical-warning value, or any
+        health counter - before it may say CLEAN.
+        """
+        if self.health_passed is not None or self.critical_warning is not None:
+            return True
+        return any(get(self) is not None for _name, get in HEALTH_COUNTERS)
+
 
 # The counters that, if they worsen across a run, mean trouble. Each pairs the
 # field's display name with a typed accessor, so a rename is caught by the type
@@ -230,11 +245,23 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
             try:
                 payload: dict[str, Any] = result.json()
                 temp = _kelvin_or_celsius(payload.get("temperature"))
-            except ValueError:
+            # AttributeError/TypeError guard valid-but-non-object JSON (null, [], a
+            # bare number): .get would raise rather than JSONDecodeError. A bad
+            # temperature sample must never stall or fail a run, so fall through to
+            # the smartctl fallback rather than propagate.
+            except (ValueError, AttributeError, TypeError):
                 temp = None
+    # Apply the plausibility window per source: an implausible nvme reading must
+    # not suppress the smartctl fallback (which may still return a good value).
+    temp = _plausible(temp)
     if temp is None:
         info = read_smart(runner, dev_path, mode)
-        temp = info.temperature_c
+        temp = _plausible(info.temperature_c)
+    return temp
+
+
+def _plausible(temp: int | None) -> int | None:
+    """A temperature within the plausible window, else None (reject bridge garbage)."""
     if temp is None or not (MIN_PLAUSIBLE_TEMP_C <= temp <= MAX_PLAUSIBLE_TEMP_C):
         return None
     return temp

@@ -12,6 +12,7 @@ import pytest
 
 from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.fio import (
+    TERMINATE_GRACE_S,
     FioReadError,
     FioRunner,
     ReadKind,
@@ -101,6 +102,23 @@ def test_parse_read_json_job_error_is_a_distinct_fioreaderror():
     with pytest.raises(ValueError) as exc:
         parse_read_json({"jobs": [{"read": {"iops": 10}}]}, ReadKind.SEQ)
     assert not isinstance(exc.value, FioReadError)
+
+
+def test_parse_read_json_fails_closed_on_non_object_json():
+    # Valid-but-non-object fio JSON (null, a list, a number) must fail closed as a
+    # plain ValueError - not a bare AttributeError that escapes the caller's
+    # `except ValueError` and aborts the whole benchmark battery.
+    for bad in (None, [], 5, "x"):
+        with pytest.raises(ValueError) as exc:
+            parse_read_json(bad, ReadKind.SEQ)
+        assert not isinstance(exc.value, FioReadError)
+
+
+def test_parse_read_json_fails_closed_on_non_object_job():
+    # jobs[0] present but not an object (a bare number): .get would raise, so fail
+    # closed as ValueError rather than propagate an AttributeError.
+    with pytest.raises(ValueError):
+        parse_read_json({"jobs": [5]}, ReadKind.SEQ)
 
 
 def test_parse_read_json_raises_on_missing_bandwidth():
@@ -300,12 +318,14 @@ class _StubbornProc:
         self.stdout = io.StringIO("")
         self.terminate_called = False
         self.killed = False
+        self.wait_calls: list[float | None] = []
         self._alive = True
 
     def poll(self):
         return None if self._alive else -9
 
     def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
         if timeout is not None and self._alive:
             raise subprocess.TimeoutExpired(cmd="fio", timeout=timeout)
         return -9
@@ -346,6 +366,18 @@ def test_run_region_escalates_to_sigkill_when_fio_ignores_sigterm(tmp_path):
     result = runner.run_region("/dev/sdx", Region(1, 0, 1024), tmp_path / "f.log")
     assert result is RegionResult.OVERHEAT
     assert proc.terminate_called and proc.killed
+
+
+def test_terminate_reaps_process_after_sigkill():
+    # After escalating to SIGKILL, _terminate must reap the process with a blocking
+    # wait() so it can't linger as a zombie on paths that never wait() again (the
+    # exception-cleanup finally). The reap is a no-timeout wait after the kill.
+    proc = _StubbornProc()
+    FioRunner._terminate(proc)  # type: ignore[arg-type]  # test fake stands in for Popen
+    assert proc.terminate_called and proc.killed
+    # First wait was the grace wait (timed out -> escalation); the last is the reap.
+    assert proc.wait_calls[0] == TERMINATE_GRACE_S
+    assert proc.wait_calls[-1] is None
 
 
 def test_run_region_does_not_launch_fio_if_log_open_fails(tmp_path):
