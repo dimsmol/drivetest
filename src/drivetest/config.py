@@ -17,10 +17,13 @@ from .units import GIB
 
 MINUTE = 60  # seconds in a minute
 
-# Thermal thresholds sized for the USB *bridge's* drop point (~83 C observed on a
-# passive enclosure), not the drive's own ~90 C warning: the ceiling leaves
-# margin below the disconnect. See the ``thermal`` module for how they drive the
-# pacing loops.
+# Thermal thresholds sized for the USB *bridge*, not the drive. On a passive
+# enclosure the bridge overheats and drops off the bus around ~83 C (observed in
+# practice); the drive's own ~90 C warning sits higher than the bridge ever lets
+# it reach, so the bridge disconnect - not the drive - is the real limit. The
+# ceiling (75 C) therefore stays within the drive's ~75-80 C throttle band and
+# leaves clear margin below the ~83 C disconnect. See the ``thermal`` module for
+# how these drive the pacing loops.
 DEFAULT_THERMAL_POLICY = ThermalPolicy(
     ceiling_c=75,  # abort a running region at/above this
     cool_target_c=45,  # cool to this before each region

@@ -338,11 +338,15 @@ def _write_phase(
 
     if ran == 0:
         logger.log("   note: no parts ran")
-    # A --only subset that fully passed verifies only those parts, not the drive;
-    # the note's presence is what marks the outcome partial.
+    # Mark the outcome partial only when the selection is a *proper* subset - it
+    # left some part unrun, so only those parts are verified, not the drive. An
+    # --only that happens to cover every part (e.g. --parts 4 --only 1-4) verified
+    # the whole drive in this run, so it is not partial.
+    all_indices = {region.index for region in regions}
+    is_proper_subset = selected is not None and selected != all_indices
     detail = (
         f"parts {config.only} of {config.parts}"
-        if status is VerifyStatus.PASS and config.only is not None
+        if status is VerifyStatus.PASS and is_proper_subset
         else None
     )
     return VerifyOutcome(status, detail=detail)

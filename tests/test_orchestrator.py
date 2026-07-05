@@ -538,6 +538,24 @@ def test_write_only_subset_runs_selected_parts_and_flags_partial(tmp_path):
     assert "skipped (not selected)" in summary
 
 
+def test_write_only_covering_all_parts_is_not_flagged_partial(tmp_path):
+    # --only 1-4 of 4 covers every part, so this run verified the whole drive: it
+    # must NOT be labelled "not the whole drive" even though --only was passed.
+    runner = _write_runner()
+    launched = []
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda argv: launched.append(argv) or _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True, parts=4, only="1-4"), ctx)
+    assert code == EXIT_OK
+    assert len(launched) == 4  # all parts ran
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "not the whole drive" not in summary
+    assert "write/verify : PASS" in summary
+
+
 def test_write_quick_mode_runs_a_single_region(tmp_path):
     # --quick writes one leading region, not the whole drive in parts.
     runner = _write_runner()
