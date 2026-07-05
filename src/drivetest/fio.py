@@ -8,12 +8,7 @@ Two deliberately different output strategies (see the module design notes):
   is unambiguous. A monitor samples temperature alongside and aborts the run at
   the thermal ceiling before the enclosure can hard-disconnect.
 - **read benchmarks** use ``--output-format=json`` for exact bandwidth/IOPS,
-  parsed by field - robust against the ambiguities that trip up text scraping
-  (the aggregate ``READ:`` line vs. the ``seqread`` job header, locale, etc.).
-
-The pure pieces - argv construction, JSON parsing, region classification and
-the monitor decision loop - are unit-tested; :class:`FioRunner` wires them to a
-real subprocess and gets a light integration test against a scratch file.
+  parsed by field.
 """
 
 from __future__ import annotations
@@ -153,7 +148,7 @@ class FioReadError(ValueError):
 
     A ``ValueError`` subclass so existing ``except ValueError`` callers still
     treat it as an unusable result, but a distinct type so the caller can tell a
-    real read IO error (e.g. unreadable sectors) apart from unparseable output
+    real read IO error (e.g. unreadable sectors) apart from unparsable output
     and surface it instead of silently logging "could not parse".
     """
 
@@ -294,7 +289,7 @@ class FioRunner:
         with open(log_path, "w") as logf:
             proc = self._popen(argv)
             reader: threading.Thread | None = None
-            # This finally runs before the log file closes, on every path (Ctrl-C,
+            # The finally runs before the log file closes, on every path (Ctrl-C,
             # an error in the monitor, a kill): it stops fio - so we never leave a
             # write running against the device - and only then joins the drain
             # thread, so the thread can't write to a closed log (which would drop

@@ -1,10 +1,4 @@
-"""Block-device enumeration and identity, backed by ``lsblk --json``.
-
-Using lsblk's JSON output (instead of scraping columns) removes a whole class
-of parsing bugs: tree glyphs, locale-dependent column widths, and ambiguous
-whitespace. :func:`parse_lsblk` is pure, so it is exhaustively unit-tested
-against captured real output.
-"""
+"""Block-device enumeration and identity, backed by ``lsblk --json``."""
 
 from __future__ import annotations
 
@@ -53,8 +47,7 @@ class Device:
         """The size in bytes, raising if lsblk reported none.
 
         A real whole disk always has a size, so its absence is an unexpected
-        lsblk state we refuse to paper over with a fake ``0`` (which would feed a
-        bogus value into the identity fingerprint and the region math).
+        lsblk state we refuse.
         """
         if self.size is None:
             raise ValueError(f"{self.path} has no size reported by lsblk")
@@ -105,9 +98,7 @@ def _device_from_node(node: Any) -> Device:
     if not isinstance(node, dict):
         raise ValueError("lsblk device node is not an object")
     node = cast("dict[str, Any]", node)
-    # Every lsblk device has a name; its absence is malformed output. Requiring it
-    # also means the path fallback below is always a real "/dev/<name>", never
-    # "/dev/None".
+    # Every lsblk device has a name; its absence is malformed output.
     name = _clean(node.get("name"))
     if name is None:
         raise ValueError("lsblk device node has no name")
@@ -142,8 +133,7 @@ def parse_lsblk(data: dict[str, Any] | str) -> list[Device]:
 
 def canonical_path(path: str) -> str:
     """Resolve a ``/dev/disk/by-id/...`` symlink to the real node, like
-    ``readlink -f``. Guards downstream string comparisons against a symlink
-    slipping past a path check.
+    ``readlink -f``.
     """
     return os.path.realpath(path)
 

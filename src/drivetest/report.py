@@ -1,8 +1,7 @@
 """Logging, SMART comparison and final result classification.
 
 SMART health is compared *structurally* (field by field on the counters that
-matter) instead of by diffing scrubbed text - more robust and directly
-testable. A logger tees to a summary file so the on-disk record matches what the
+matter). A logger tees to a summary file so the on-disk record matches what the
 user saw on screen.
 """
 
@@ -156,9 +155,9 @@ def classify_smart(
     that returned identity only) is UNKNOWN too, not CLEAN - "answered but told us
     nothing" is not a clean bill of health.
 
-    ``regressions`` is required (no default): it is the only channel for
-    non-counter regressions such as a raised NVMe critical warning, so a caller
-    must consciously supply it rather than silently omit the signal.
+    ``regressions`` is required: it is the only channel for  non-counter regressions
+    such as a raised NVMe critical warning, so a caller must consciously supply it
+    rather than silently omit the signal.
     """
     if not after.has_report:
         return SmartVerdict.UNKNOWN

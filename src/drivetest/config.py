@@ -1,11 +1,4 @@
-"""The resolved run configuration and its default values, in one place.
-
-This is the single home for defaults. The boundary (the CLI, or a future config
-file) resolves a :class:`RunConfig` by starting from the defaults here and
-applying overrides, then hands the finished config to the orchestrator - which
-consumes it without knowing where any value came from. So no other module
-imports these defaults; they flow in through ``RunConfig``.
-"""
+"""The run configuration type and related default values."""
 
 from __future__ import annotations
 
@@ -20,10 +13,9 @@ MINUTE = 60  # seconds in a minute
 # Thermal thresholds sized for the USB *bridge*, not the drive. On a passive
 # enclosure the bridge overheats and drops off the bus around ~83 C (observed in
 # practice); the drive's own ~90 C warning sits higher than the bridge ever lets
-# it reach, so the bridge disconnect - not the drive - is the real limit. The
-# ceiling (75 C) therefore stays within the drive's ~75-80 C throttle band and
-# leaves clear margin below the ~83 C disconnect. See the ``thermal`` module for
-# how these drive the pacing loops.
+# it reach, so the bridge disconnect is the real limit. The ceiling stays within
+# the drive's ~75-80 C throttle band and leaves clear margin below the ~83 C
+# disconnect. See the ``thermal`` module for how these drive the pacing loops.
 DEFAULT_THERMAL_POLICY = ThermalPolicy(
     ceiling_c=75,  # abort a running region at/above this
     cool_target_c=45,  # cool to this before each region
@@ -47,12 +39,7 @@ DEFAULT_PARTS = 1
 
 @dataclass(frozen=True)
 class RunConfig:
-    """A fully-resolved run configuration: what to do plus how to pace it.
-
-    A pure structure with no built-in defaults - every field is set explicitly at
-    construction. The CLI is the one place that resolves it, applying the defaults
-    above; the orchestrator only ever consumes a finished config.
-    """
+    """Run configuration: what to do plus how to pace it."""
 
     device: str
     write: bool
@@ -68,11 +55,6 @@ class RunConfig:
     policy: ThermalPolicy
 
     def __post_init__(self) -> None:
-        # RunConfig is the boundary contract the orchestrator trusts, so enforce the
-        # numeric invariants here rather than relying on the CLI. A bad config from
-        # any future source (a config file, a programmatic caller) then fails closed
-        # at construction instead of deep in the region math. ThermalPolicy validates
-        # itself the same way.
         if self.parts < 1:
             raise ValueError(f"parts must be >= 1, got {self.parts}")
         if self.quick_bytes <= 0:

@@ -1,8 +1,7 @@
 """Data-safety guards for the destructive write.
 
 These decide whether ``--write`` may touch a device. Every check is a *pure*
-function over already-gathered data, so the exact logic that protects unrelated
-disks is unit-tested against fixtures - no hardware, no mocking of side effects.
+function over already-gathered data.
 
 Design principle: **fail closed**. If a fact cannot be positively established
 (an lsblk error, an unreadable probe), the safe answer is "not safe to write",

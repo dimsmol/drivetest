@@ -112,8 +112,7 @@ def parse_args(argv: list[str]) -> RunConfig:
 
     # --parts defaults to None so an explicit value is distinguishable from the
     # default: the "requires --write" rule then applies to any explicit --parts,
-    # not just one that happens to differ from DEFAULT_PARTS (which would silently
-    # accept "--parts 1", and break outright if the default ever changed).
+    # not just one that happens to differ from DEFAULT_PARTS.
     parts = DEFAULT_PARTS if ns.parts is None else ns.parts
     if parts < 1:
         parser.error("--parts needs a positive integer")

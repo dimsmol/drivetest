@@ -1,9 +1,8 @@
 """Read SMART/health/temperature via ``smartctl`` (and ``nvme`` for temp).
 
 ``smartctl --json`` (smartmontools >= 7) gives structured health data, so we
-address fields by name instead of grepping formatted text, which is brittle
-across locales and versions. :func:`parse_smart_json` is pure and tested
-against captured NVMe and SATA report fixtures.
+address fields by name. :func:`parse_smart_json` is pure and tested against
+captured NVMe and SATA report fixtures.
 
 USB bridges expose the drive through different passthrough modes; we probe the
 common ones and remember the ``-d`` args that work (:func:`detect_access_mode`).
@@ -228,7 +227,7 @@ def read_smart(
     ``timeout`` bounds the smartctl call for the live temperature monitor, whose
     read must never block (see :data:`TEMP_READ_TIMEOUT_S`); a timed-out read
     fails closed to a no-report snapshot. The baseline/after snapshots leave it
-    ``None`` (unbounded), matching the previous behaviour.
+    ``None`` (unbounded).
     """
     try:
         result = runner.run(["smartctl", "--json", "-x", *mode, dev_path], timeout=timeout)
@@ -253,16 +252,14 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     """
     temp: int | None = None
     # Resolve symlinks and match the real node name (like required_tools), so we
-    # only reach for ``nvme`` on an actual NVMe device - a substring check would
-    # try it on a non-NVMe path that merely contains "nvme", where the binary may
-    # not even be installed.
+    # only reach for ``nvme`` on an actual NVMe device.
     if is_nvme_target(dev_path):
         try:
             result = runner.run(
                 ["nvme", "smart-log", dev_path, "-o", "json"], timeout=TEMP_READ_TIMEOUT_S
             )
-        # ToolUnavailable: binary absent. ProcTimeout: the read stalled. Either
-        # way fall through to the smartctl fallback rather than propagate.
+        # ToolUnavailable: binary absent or couldn't be used. ProcTimeout: the read stalled.
+        # Either way fall through to the smartctl fallback rather than propagate.
         except (ToolUnavailable, ProcTimeout):
             result = None
         if result is not None and result.ok:

@@ -1,8 +1,6 @@
 """Split a drive into write+verify regions and parse ``--only`` specs.
 
-All pure arithmetic and string parsing - the most heavily tested module, since
-these off-by-one and range-parsing details are exactly where a resume can go
-wrong (write the wrong span, or silently skip a region).
+All pure arithmetic and string parsing.
 """
 
 from __future__ import annotations

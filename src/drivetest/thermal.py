@@ -23,12 +23,7 @@ Temp = int | None
 
 @dataclass(frozen=True)
 class ThermalPolicy:
-    """Tunable thermal thresholds (Celsius; waits/cadences in seconds).
-
-    A pure data structure with no built-in defaults - the canonical values live
-    in :mod:`drivetest.config` as ``DEFAULT_THERMAL_POLICY``, where each field's
-    meaning is documented.
-    """
+    """Tunable thermal thresholds (Celsius; waits/cadences in seconds)."""
 
     ceiling_c: int
     cool_target_c: int
@@ -68,8 +63,8 @@ def needs_cooldown(temp: Temp, policy: ThermalPolicy) -> bool:
 
 
 def can_start(temp: Temp, policy: ThermalPolicy) -> bool:
-    """Whether a region may start. Unknown temperature -> allow (like the shell
-    script); a known reading must be at/below ``start_max_c``.
+    """Whether a region may start. Unknown temperature -> allow; a known
+    reading must be at/below ``start_max_c``.
     """
     return temp is None or temp <= policy.start_max_c
 

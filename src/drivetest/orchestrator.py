@@ -1,9 +1,9 @@
 """End-to-end run: safety -> SMART baseline -> write+verify -> benchmarks ->
 SMART diff -> summary.
 
-This is the thin glue on top of the (heavily tested) pure modules. Its external
-effects are injected via :class:`RunContext`, so the safety-abort paths and the
-read-only happy path can be integration-tested with fakes.
+This is the thin glue on top of the other modules. Its external effects are
+injected via :class:`RunContext`, so the safety-abort paths and the read-only
+happy path can be integration-tested with fakes.
 
 Exit codes: ``0`` OK, ``1`` refused to run (a usage error or a safety guard, so
 nothing was written), ``2`` ran but needs attention (verify FAIL/OVERHEAT,
@@ -183,9 +183,12 @@ def run(config: RunConfig, ctx: RunContext) -> int:
             # logger.log must not turn this into a bare-traceback exit 1.
             _safe_log(logger, "")
             _safe_log(logger, f"!! write phase failed: {exc!r}")
-            _safe_log(logger, "RESULT: INCOMPLETE - the write was interrupted by an unexpected "
-                      "error after the device was partially written. Cool it, replug, and resume "
-                      "with --only <remaining parts>.")
+            _safe_log(
+                logger,
+                "RESULT: INCOMPLETE - the write was interrupted by an unexpected "
+                "error after the device was partially written. Cool it, replug, and resume "
+                "with --only <remaining parts>.",
+            )
             return EXIT_ATTENTION
 
     # --- post-write reporting: survival, benchmarks, SMART diff, summary --
@@ -199,16 +202,17 @@ def run(config: RunConfig, ctx: RunContext) -> int:
         if config.write:
             logger.log(f"   write/verify: {verify.describe()}")
             logger.log("")
-        return _report_and_finish(
-            config, runner, dev, mode, logger, log_dir, before, verify, temps
-        )
+        return _report_and_finish(config, runner, dev, mode, logger, log_dir, before, verify, temps)
     except (Exception, KeyboardInterrupt) as exc:
         if not config.write:
             raise
         _safe_log(logger, "")
         _safe_log(logger, f"!! post-write reporting failed: {exc!r}")
-        _safe_log(logger, "RESULT: INCOMPLETE - the device was written but the run could not "
-                  "finish reporting. Inspect the logs above and re-check SMART manually.")
+        _safe_log(
+            logger,
+            "RESULT: INCOMPLETE - the device was written but the run could not "
+            "finish reporting. Inspect the logs above and re-check SMART manually.",
+        )
         return EXIT_ATTENTION
 
 
@@ -246,14 +250,17 @@ def _guard_and_confirm(config: RunConfig, ctx: RunContext, dev: Device, logger: 
     failures = blocking_failures(checks)
     if failures:
         logger.log("")
-        logger.log("error: refusing to write. Failed guard(s): "
-                   + ", ".join(c.name for c in failures))
+        logger.log(
+            "error: refusing to write. Failed guard(s): " + ", ".join(c.name for c in failures)
+        )
         return EXIT_REFUSED
 
     logger.log("")
     logger.log("*** WRITE mode will ERASE ALL DATA on:")
-    logger.log(f"      {dev.path} | {dev.model} | serial {dev.serial} | "
-               f"{format_gib(dev.size_bytes)} | bus {dev.tran}")
+    logger.log(
+        f"      {dev.path} | {dev.model} | serial {dev.serial} | "
+        f"{format_gib(dev.size_bytes)} | bus {dev.tran}"
+    )
     logger.log("")
 
     if not config.assume_yes:
@@ -288,8 +295,13 @@ def _recheck_before_write(ctx: RunContext, dev: Device, logger: Logger) -> int:
 
 
 def _write_phase(
-    config: RunConfig, ctx: RunContext, dev: Device, logger: Logger,
-    thermal: ThermalController, fio_runner: FioRunner, log_dir: Path,
+    config: RunConfig,
+    ctx: RunContext,
+    dev: Device,
+    logger: Logger,
+    thermal: ThermalController,
+    fio_runner: FioRunner,
+    log_dir: Path,
 ) -> VerifyOutcome:
     """Run the quick or paced full write+verify."""
     if config.quick:
@@ -297,8 +309,10 @@ def _write_phase(
         # asking fio to write past the end (a spurious FAIL) - the quick default is
         # a fixed size chosen for large drives.
         region = quick_region(min(config.quick_bytes, dev.size_bytes))
-        logger.log(f">> write+verify (crc32c, first {format_gib(region.size)} quick); "
-                   f"ceiling {config.policy.ceiling_c} C")
+        logger.log(
+            f">> write+verify (crc32c, first {format_gib(region.size)} quick); "
+            f"ceiling {config.policy.ceiling_c} C"
+        )
         if thermal.prestart_ok():
             result = fio_runner.run_region(dev.path, region, log_dir / "fio_writeverify.log")
         else:
@@ -320,8 +334,10 @@ def _write_phase(
         if selected is not None and region.index not in selected:
             logger.log(f">> part {region.index}/{config.parts}: skipped (not selected)")
             continue
-        logger.log(f">> part {region.index}/{config.parts}  "
-                   f"offset={format_gib(region.offset)}  size={format_gib(region.size)}")
+        logger.log(
+            f">> part {region.index}/{config.parts}  "
+            f"offset={format_gib(region.offset)}  size={format_gib(region.size)}"
+        )
         if not thermal.prestart_ok():
             status = VerifyStatus.OVERHEAT
             logger.log(f"   stopping before part {region.index} (too hot to start)")
@@ -338,10 +354,9 @@ def _write_phase(
 
     if ran == 0:
         logger.log("   note: no parts ran")
-    # Mark the outcome partial only when the selection is a *proper* subset - it
-    # left some part unrun, so only those parts are verified, not the drive. An
-    # --only that happens to cover every part (e.g. --parts 4 --only 1-4) verified
-    # the whole drive in this run, so it is not partial.
+    # Mark the outcome partial only when the selection has left some part unrun
+    # (is a *proper* subset). An --only that happens to cover every part (e.g.
+    # --parts 4 --only 1-4) verified the whole drive, so it is not partial.
     all_indices = {region.index for region in regions}
     is_proper_subset = selected is not None and selected != all_indices
     detail = (
@@ -417,8 +432,10 @@ def _report_and_finish(
     if dev_gone:
         pass  # device already gone; survival note logged above
     elif verify.needs_attention:
-        logger.log(">> read benchmarks: skipped (write phase needs attention - "
-                   "not stressing the drive further)")
+        logger.log(
+            ">> read benchmarks: skipped (write phase needs attention - "
+            "not stressing the drive further)"
+        )
         logger.log("")
     else:
         read_error = _read_benchmarks(runner, dev, logger, log_dir)
@@ -444,14 +461,20 @@ def _report_and_finish(
 
     if dev_gone or verify.needs_attention or verdict is not SmartVerdict.CLEAN or read_error:
         if dev_gone:
-            logger.log("RESULT: INCOMPLETE - device disconnected mid-run (likely thermal). "
-                       "Cool it, replug, and resume with --only.")
+            logger.log(
+                "RESULT: INCOMPLETE - device disconnected mid-run (likely thermal). "
+                "Cool it, replug, and resume with --only."
+            )
         elif verify.status is VerifyStatus.OVERHEAT:
-            logger.log("RESULT: INCOMPLETE - stopped on temperature ceiling; "
-                       "use more --parts (and/or a fan).")
+            logger.log(
+                "RESULT: INCOMPLETE - stopped on temperature ceiling; "
+                "use more --parts (and/or a fan)."
+            )
         elif read_error:
-            logger.log("RESULT: ATTENTION NEEDED - a read benchmark hit an IO error "
-                       "(possible unreadable sectors); inspect the logs above.")
+            logger.log(
+                "RESULT: ATTENTION NEEDED - a read benchmark hit an IO error "
+                "(possible unreadable sectors); inspect the logs above."
+            )
         else:
             logger.log("RESULT: ATTENTION NEEDED - inspect the logs above.")
         return EXIT_ATTENTION
@@ -483,8 +506,10 @@ def _read_benchmarks(runner: Runner, dev: Device, logger: Logger, log_dir: Path)
             # failed (e.g. it bailed on an unreadable sector before emitting a
             # report) - flag attention rather than bury it as a parse hiccup.
             if not result.ok:
-                logger.log(f"   !! read error: fio exited {result.returncode} with no "
-                           "parseable output - possible unreadable sectors")
+                logger.log(
+                    f"   !! read error: fio exited {result.returncode} with no "
+                    "parseable output - possible unreadable sectors"
+                )
                 read_error = True
             else:
                 logger.log("   (could not parse fio output)")
