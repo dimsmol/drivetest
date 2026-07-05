@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .proc import Runner, ToolUnavailable
+from .proc import ProcTimeout, Runner, ToolUnavailable
 from .tools import is_nvme_target
 
 # smartctl ``-d`` argument sets to try, in order: bare/auto first, then the
@@ -41,6 +41,16 @@ MAX_PLAUSIBLE_TEMP_C = 110
 KELVIN_OFFSET = 273
 # No drive runs this hot in Celsius, so a value above it must be Kelvin.
 CELSIUS_KELVIN_THRESHOLD = 200
+
+# Bound on a temperature read taken by the live write monitor. The monitor can
+# only abort fio at the ceiling *between* reads, so a read that blocks (a bridge
+# wedging under thermal stress, a device stuck on a stalled admin command) would
+# freeze the ceiling check while fio keeps writing. A timeout keeps the loop
+# alive: a timed-out read fails closed to "unknown", which the pacing loops treat
+# as "proceed" (never blocking the run on a bad sample), and control returns so
+# the next poll re-checks liveness and the ceiling. The baseline/after snapshots
+# pass no timeout - only the repeated monitor reads need the bound.
+TEMP_READ_TIMEOUT_S = 15.0
 
 # ATA SMART attribute ids (the smartctl ``id`` field) for the health counters we
 # read; paired with their canonical names as an id-or-name fallback.
@@ -208,19 +218,27 @@ def detect_access_mode(runner: Runner, dev_path: str) -> list[str]:
     return []
 
 
-def read_smart(runner: Runner, dev_path: str, mode: list[str]) -> SmartInfo:
+def read_smart(
+    runner: Runner, dev_path: str, mode: list[str], *, timeout: float | None = None
+) -> SmartInfo:
     """Read a full JSON SMART report. Returns an empty :class:`SmartInfo`
     (``has_report`` False) if the output is not valid JSON - e.g. the device
     dropped and smartctl printed an error instead of a report.
+
+    ``timeout`` bounds the smartctl call for the live temperature monitor, whose
+    read must never block (see :data:`TEMP_READ_TIMEOUT_S`); a timed-out read
+    fails closed to a no-report snapshot. The baseline/after snapshots leave it
+    ``None`` (unbounded), matching the previous behaviour.
     """
-    result = runner.run(["smartctl", "--json", "-x", *mode, dev_path])
     try:
+        result = runner.run(["smartctl", "--json", "-x", *mode, dev_path], timeout=timeout)
         obj: dict[str, Any] = result.json()
         return parse_smart_json(obj)
+    # ProcTimeout = a bounded (monitor) read stalled; fail closed rather than hang.
     # ValueError = not valid JSON (device dropped, smartctl printed an error);
     # AttributeError/TypeError = valid-but-non-object JSON (null, [], a number)
-    # whose .get would raise. Both fail closed to a no-report SmartInfo.
-    except (ValueError, AttributeError, TypeError):
+    # whose .get would raise. All fail closed to a no-report SmartInfo.
+    except (ProcTimeout, ValueError, AttributeError, TypeError):
         return SmartInfo(raw=None)
 
 
@@ -229,7 +247,9 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
 
     Prefers ``nvme smart-log`` (JSON) for an NVMe node, else ``smartctl``. A
     plausibility window (MIN_PLAUSIBLE_TEMP_C..MAX_PLAUSIBLE_TEMP_C) rejects
-    garbage from a flaky bridge.
+    garbage from a flaky bridge. Both reads are bounded by
+    :data:`TEMP_READ_TIMEOUT_S` so the live write monitor can never block on a
+    stalled read (a timeout reads as "unknown", i.e. proceed).
     """
     temp: int | None = None
     # Resolve symlinks and match the real node name (like required_tools), so we
@@ -238,8 +258,12 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     # not even be installed.
     if is_nvme_target(dev_path):
         try:
-            result = runner.run(["nvme", "smart-log", dev_path, "-o", "json"])
-        except ToolUnavailable:
+            result = runner.run(
+                ["nvme", "smart-log", dev_path, "-o", "json"], timeout=TEMP_READ_TIMEOUT_S
+            )
+        # ToolUnavailable: binary absent. ProcTimeout: the read stalled. Either
+        # way fall through to the smartctl fallback rather than propagate.
+        except (ToolUnavailable, ProcTimeout):
             result = None
         if result is not None and result.ok:
             try:
@@ -255,7 +279,7 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     # not suppress the smartctl fallback (which may still return a good value).
     temp = _plausible(temp)
     if temp is None:
-        info = read_smart(runner, dev_path, mode)
+        info = read_smart(runner, dev_path, mode, timeout=TEMP_READ_TIMEOUT_S)
         temp = _plausible(info.temperature_c)
     return temp
 

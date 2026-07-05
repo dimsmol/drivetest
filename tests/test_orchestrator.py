@@ -30,7 +30,7 @@ from drivetest.orchestrator import (
 from drivetest.proc import Result
 from drivetest.units import GIB
 
-from .conftest import FakeRunner, load_text
+from .conftest import Call, FakeRunner, load_text
 
 
 def test_region_to_verify_mapping_is_exhaustive():
@@ -498,6 +498,68 @@ def test_write_aborts_on_thermal_ceiling(tmp_path, monkeypatch):
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "temperature ceiling" in summary
     assert "too hot to start" in summary
+
+
+def _fio_bench_calls(runner: FakeRunner) -> list[Call]:
+    """The read-benchmark fio invocations recorded by the runner.
+
+    The write+verify pass runs through ``ctx.popen`` (the FioRunner), so the only
+    ``fio`` commands that reach ``runner.run`` are the post-write read benchmarks.
+    """
+    return [c for c in runner.calls if c.argv and c.argv[0] == "fio"]
+
+
+def test_write_overheat_skips_read_benchmarks(tmp_path, monkeypatch):
+    # After an OVERHEAT stop the drive is near the ceiling; the unpaced read
+    # benchmarks must be skipped rather than provoke the disconnect the pacing
+    # exists to avoid. The run still exits ATTENTION with the ceiling explanation.
+    monkeypatch.setattr(
+        "drivetest.orchestrator.ThermalController.prestart_ok", lambda self: False
+    )
+    runner = _write_runner()
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda _argv: _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_ATTENTION
+    assert _fio_bench_calls(runner) == []  # benchmarks never ran
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "read benchmarks: skipped" in summary
+    assert "temperature ceiling" in summary
+
+
+def test_write_verify_failure_skips_read_benchmarks(tmp_path):
+    # A verify FAIL already flags the run; there's no value in stressing the drive
+    # with the read benchmarks afterward, so they are skipped too.
+    runner = _write_runner()
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda _argv: _DoneProc(1),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_ATTENTION
+    assert _fio_bench_calls(runner) == []  # benchmarks never ran
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "read benchmarks: skipped" in summary
+
+
+def test_write_pass_still_runs_read_benchmarks(tmp_path):
+    # A clean write PASS is not "needs attention", so the read benchmarks run as
+    # usual - the skip must not swallow the normal post-write benchmarks.
+    runner = _write_runner()
+    ctx = _ctx(
+        runner, tmp_path,
+        popen=lambda _argv: _DoneProc(0),
+        sys_block=_sys_block_for(tmp_path),
+    )
+    code = run(_config("/dev/sda", write=True, assume_yes=True), ctx)
+    assert code == EXIT_OK
+    assert len(_fio_bench_calls(runner)) == 2  # seqread + randread both ran
+    summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
+    assert "read benchmarks: skipped" not in summary
 
 
 def test_write_stops_after_a_failed_part_and_does_not_continue(tmp_path):

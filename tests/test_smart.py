@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -11,6 +12,7 @@ from drivetest.smart import (
     KELVIN_OFFSET,
     MAX_PLAUSIBLE_TEMP_C,
     MIN_PLAUSIBLE_TEMP_C,
+    TEMP_READ_TIMEOUT_S,
     _kelvin_or_celsius,
     detect_access_mode,
     parse_smart_json,
@@ -19,6 +21,10 @@ from drivetest.smart import (
 )
 
 from .conftest import FakeRunner, load_json, load_text
+
+# A subprocess.TimeoutExpired, which the runner translates to ProcTimeout, models
+# a temperature read that stalled (a wedged bridge under thermal stress).
+_TIMEOUT_ERROR = subprocess.TimeoutExpired("cmd", TEMP_READ_TIMEOUT_S)
 
 # A plausible Celsius drive temperature; the Kelvin-conversion tests build their
 # input from it with KELVIN_OFFSET, so the round-trip is obvious at a glance.
@@ -271,6 +277,52 @@ def test_read_temperature_tolerates_missing_nvme_binary(fake_runner: FakeRunner)
     fake_runner.add("nvme", contains=["smart-log"], error=FileNotFoundError("nvme"))
     fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
     assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
+
+
+def test_read_temperature_bounds_both_reads_with_a_timeout(fake_runner: FakeRunner):
+    # The live write monitor calls this on every poll and can only abort fio at the
+    # ceiling *between* reads, so a read must never block. Both the nvme read and
+    # the smartctl fallback must carry TEMP_READ_TIMEOUT_S so a wedged tool can't
+    # freeze the ceiling check.
+    fake_runner.add("nvme", contains=["smart-log"], stdout="null")  # forces the fallback
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    read_temperature(fake_runner, "/dev/nvme0n1", [])
+    timeouts = {call.argv[0]: call.timeout for call in fake_runner.calls}
+    assert timeouts["nvme"] == TEMP_READ_TIMEOUT_S
+    assert timeouts["smartctl"] == TEMP_READ_TIMEOUT_S
+
+
+def test_read_temperature_nvme_timeout_falls_back_to_smartctl(fake_runner: FakeRunner):
+    # A stalled nvme read (ProcTimeout) must not propagate out of a best-effort
+    # temperature read; fall through to the smartctl fallback like any other nvme
+    # failure, so the monitor loop keeps running.
+    fake_runner.add("nvme", contains=["smart-log"], error=_TIMEOUT_ERROR)
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) == 34
+
+
+def test_read_temperature_returns_none_when_both_reads_time_out(fake_runner: FakeRunner):
+    # If both the nvme read and the smartctl fallback stall, the temperature is
+    # unknown (None) - which the pacing loops treat as "proceed" - never a hang.
+    fake_runner.add("nvme", contains=["smart-log"], error=_TIMEOUT_ERROR)
+    fake_runner.add("smartctl", contains=["--json"], error=_TIMEOUT_ERROR)
+    assert read_temperature(fake_runner, "/dev/nvme0n1", []) is None
+
+
+def test_read_smart_fails_closed_on_timeout(fake_runner: FakeRunner):
+    # A bounded read that stalls fails closed to a no-report SmartInfo rather than
+    # letting ProcTimeout escape the parser's guard.
+    fake_runner.add("smartctl", contains=["--json"], error=_TIMEOUT_ERROR)
+    info = read_smart(fake_runner, "/dev/sda", [], timeout=TEMP_READ_TIMEOUT_S)
+    assert not info.has_report
+
+
+def test_read_smart_snapshot_is_unbounded_by_default(fake_runner: FakeRunner):
+    # The baseline/after snapshots pass no timeout (unbounded), unchanged from
+    # before: only the repeated monitor reads need the bound.
+    fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))
+    read_smart(fake_runner, "/dev/sda", [])
+    assert fake_runner.calls[-1].timeout is None
 
 
 def test_kelvin_or_celsius():

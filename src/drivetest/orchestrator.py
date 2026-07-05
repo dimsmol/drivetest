@@ -405,8 +405,22 @@ def _report_and_finish(
         logger.log("")
 
     # --- read benchmarks --------------------------------------------------
+    # The read benchmarks run unpaced (~90s of sustained IO with no cooldown or
+    # ceiling monitor - that machinery is the write path's alone). Skip them when
+    # the write phase already flagged attention: after an OVERHEAT stop the drive
+    # is sitting near the ceiling, and hammering it now could provoke the very
+    # bridge disconnect the pacing exists to avoid; after a verify FAIL the run is
+    # already flagged, so there's nothing to gain by stressing it further. A
+    # read-only run has status SKIPPED (not needs_attention), so its benchmarks -
+    # the whole point of that mode - still run.
     read_error = False
-    if not dev_gone:
+    if dev_gone:
+        pass  # device already gone; survival note logged above
+    elif verify.needs_attention:
+        logger.log(">> read benchmarks: skipped (write phase needs attention - "
+                   "not stressing the drive further)")
+        logger.log("")
+    else:
         read_error = _read_benchmarks(runner, dev, logger, log_dir)
 
     # --- SMART after + diff ----------------------------------------------
