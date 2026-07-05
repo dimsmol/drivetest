@@ -235,8 +235,8 @@ def test_verify_outcome_describe():
     assert VerifyOutcome(VerifyStatus.SKIPPED).describe() == "skipped"
     assert VerifyOutcome(VerifyStatus.FAIL).describe() == "FAIL"
     assert VerifyOutcome(VerifyStatus.OVERHEAT).describe() == "OVERHEAT"
-    partial = VerifyOutcome(VerifyStatus.PASS, detail="parts 1-4 of 8")
-    assert partial.describe() == "PASS (parts 1-4 of 8 - not the whole drive)"
+    partial = VerifyOutcome(VerifyStatus.PASS, detail="parts 1-4 of 8, not the whole drive")
+    assert partial.describe() == "PASS (parts 1-4 of 8, not the whole drive)"
 
 
 def test_describe_verdict_renders_display_text():

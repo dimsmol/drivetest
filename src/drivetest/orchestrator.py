@@ -174,7 +174,7 @@ def run(config: RunConfig, ctx: RunContext) -> int:
         if rc != EXIT_OK:
             return rc
         try:
-            verify = _write_phase(config, ctx, dev, logger, thermal, fio_runner, log_dir)
+            verify = _write_phase(config, dev, logger, thermal, fio_runner, log_dir)
         except (Exception, KeyboardInterrupt) as exc:
             # The device has been partially written; never exit with a bare
             # traceback and no verdict. fio itself is already killed by
@@ -296,7 +296,6 @@ def _recheck_before_write(ctx: RunContext, dev: Device, logger: Logger) -> int:
 
 def _write_phase(
     config: RunConfig,
-    ctx: RunContext,
     dev: Device,
     logger: Logger,
     thermal: ThermalController,
@@ -360,7 +359,7 @@ def _write_phase(
     all_indices = {region.index for region in regions}
     is_proper_subset = selected is not None and selected != all_indices
     detail = (
-        f"parts {config.only} of {config.parts}"
+        f"parts {config.only} of {config.parts}, not the whole drive"
         if status is VerifyStatus.PASS and is_proper_subset
         else None
     )

@@ -66,9 +66,8 @@ _VERIFY_STATUS_TEXT = {
 class VerifyOutcome:
     """The write+verify result as data, not a formatted string.
 
-    ``detail`` is present only for a ``--only`` subset pass (the whole drive is
-    verified only once every part has passed across runs); its presence *is* the
-    "partial" flag, so the two can't disagree.
+    ``detail`` is optional free-form text shown in parentheses after the status
+    (e.g. a ``--only`` subset pass noting it did not cover the whole drive).
     """
 
     status: VerifyStatus
@@ -81,7 +80,7 @@ class VerifyOutcome:
     def describe(self) -> str:
         text = _VERIFY_STATUS_TEXT[self.status]
         if self.detail:
-            return f"{text} ({self.detail} - not the whole drive)"
+            return f"{text} ({self.detail})"
         return text
 
 

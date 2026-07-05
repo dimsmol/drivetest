@@ -63,7 +63,17 @@ target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# ARG (flake8-unused-arguments) fails on an unused function/method parameter -
+# pyright's strict mode never reports these at the CLI, so ruff is the only
+# check that catches a dead parameter (e.g. a threaded-through ctx that no
+# longer gets used).
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ARG"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test doubles and monkeypatch lambdas must match the real signatures they
+# stand in for, so they carry parameters they don't use (a fake logger's
+# `message`, `lambda self: False`). That is inherent to a stub, not a smell.
+"tests/**" = ["ARG"]
 
 [tool.pyright]
 include = ["src", "tests"]
