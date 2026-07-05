@@ -7,7 +7,7 @@ test. (The long-lived write+verify ``fio`` process is the deliberate exception:
 :mod:`drivetest.fio` drives it via ``Popen`` so it can stream output and be
 killed at the thermal ceiling.)
 
-Failures are translated to this module's own error types (:class:`ToolNotFound`,
+Failures are translated to this module's own error types (:class:`ToolUnavailable`,
 :class:`ProcTimeout`, :class:`ProcError`), so callers never have to import
 ``subprocess`` to handle them.
 """
@@ -30,13 +30,25 @@ class ProcError(RuntimeError):
         super().__init__(f"command failed ({result.returncode}): {cmd}\n{result.stderr.strip()}")
 
 
-class ToolNotFound(RuntimeError):
-    """The external command's executable was not found on PATH."""
+class ToolUnavailable(RuntimeError):
+    """An external command could not be resolved and run.
 
-    def __init__(self, argv: Sequence[str]) -> None:
+    Usually the executable is simply missing from PATH, but the same failure also
+    stands in for a tool that exists yet cannot be executed - not executable
+    (EACCES), a bad path component (ENOTDIR), or the OS otherwise refusing to spawn
+    it. The underlying OS error, when known, is kept on :attr:`cause` and appended
+    to the message so a non-"missing" reason isn't hidden behind a blanket
+    "not found".
+    """
+
+    def __init__(self, argv: Sequence[str], cause: BaseException | None = None) -> None:
         self.argv = tuple(argv)
+        self.cause = cause
         name = self.argv[0] if self.argv else "?"
-        super().__init__(f"command not found: {name} (is the tool installed and on PATH?)")
+        detail = f": {cause}" if cause is not None else ""
+        super().__init__(
+            f"could not run '{name}' (is the tool installed, on PATH, and executable?){detail}"
+        )
 
 
 class ProcTimeout(RuntimeError):
@@ -97,7 +109,7 @@ class SubprocessRunner:
         # An empty argv would raise a bare IndexError from Popen, bypassing this
         # module's error types; keep the "callers never see raw subprocess" contract.
         if not argv:
-            raise ToolNotFound(argv)
+            raise ToolUnavailable(argv)
         try:
             proc = subprocess.run(
                 list(argv),
@@ -113,7 +125,7 @@ class SubprocessRunner:
                 check=False,
             )
         except FileNotFoundError as exc:
-            raise ToolNotFound(argv) from exc
+            raise ToolUnavailable(argv, exc) from exc
         except subprocess.TimeoutExpired as exc:
             raise ProcTimeout(argv, timeout) from exc
         except OSError as exc:
@@ -121,8 +133,9 @@ class SubprocessRunner:
             # (ENOTDIR) raises another OSError subclass rather than
             # FileNotFoundError; translate it too so callers never see a raw
             # subprocess/OS error, and an unusable tool fails closed like a
-            # missing one.
-            raise ToolNotFound(argv) from exc
+            # missing one. Pass the cause so the message names the real reason
+            # (a bare "not found" would mislead for a non-missing failure).
+            raise ToolUnavailable(argv, exc) from exc
         return Result(
             argv=tuple(argv),
             returncode=proc.returncode,

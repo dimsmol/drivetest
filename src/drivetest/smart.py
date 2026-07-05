@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .proc import Runner, ToolNotFound
+from .proc import Runner, ToolUnavailable
 from .tools import is_nvme_target
 
 # smartctl ``-d`` argument sets to try, in order: bare/auto first, then the
@@ -239,7 +239,7 @@ def read_temperature(runner: Runner, dev_path: str, mode: list[str]) -> int | No
     if is_nvme_target(dev_path):
         try:
             result = runner.run(["nvme", "smart-log", dev_path, "-o", "json"])
-        except ToolNotFound:
+        except ToolUnavailable:
             result = None
         if result is not None and result.ok:
             try:

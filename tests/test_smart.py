@@ -266,7 +266,7 @@ def test_read_temperature_ignores_nvme_substring_in_non_nvme_path(fake_runner: F
 
 
 def test_read_temperature_tolerates_missing_nvme_binary(fake_runner: FakeRunner):
-    # If the nvme binary is absent (ToolNotFound), fall back to smartctl rather
+    # If the nvme binary is absent (ToolUnavailable), fall back to smartctl rather
     # than let the error propagate out of a best-effort temperature read.
     fake_runner.add("nvme", contains=["smart-log"], error=FileNotFoundError("nvme"))
     fake_runner.add("smartctl", contains=["--json"], stdout=load_text("smart_nvme.json"))

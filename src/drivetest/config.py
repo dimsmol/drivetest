@@ -66,3 +66,14 @@ class RunConfig:
     parts: int
     quick_bytes: int
     policy: ThermalPolicy
+
+    def __post_init__(self) -> None:
+        # RunConfig is the boundary contract the orchestrator trusts, so enforce the
+        # numeric invariants here rather than relying on the CLI. A bad config from
+        # any future source (a config file, a programmatic caller) then fails closed
+        # at construction instead of deep in the region math. ThermalPolicy validates
+        # itself the same way.
+        if self.parts < 1:
+            raise ValueError(f"parts must be >= 1, got {self.parts}")
+        if self.quick_bytes <= 0:
+            raise ValueError(f"quick_bytes must be > 0, got {self.quick_bytes}")

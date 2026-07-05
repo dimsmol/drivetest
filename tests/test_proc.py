@@ -17,7 +17,7 @@ from drivetest.proc import (
     ProcTimeout,
     Result,
     SubprocessRunner,
-    ToolNotFound,
+    ToolUnavailable,
     run_json,
 )
 
@@ -36,8 +36,10 @@ def test_result_check_raises_on_failure_returns_self_on_success():
 # --- SubprocessRunner error translation (real processes) ------------------
 
 def test_missing_tool_raises_tool_not_found():
-    with pytest.raises(ToolNotFound):
+    with pytest.raises(ToolUnavailable) as excinfo:
         SubprocessRunner().run(["drivetest-nonexistent-command-xyz"])
+    # the underlying OS error is preserved on the exception for diagnosis
+    assert isinstance(excinfo.value.cause, FileNotFoundError)
 
 
 def test_timeout_raises_proc_timeout():
@@ -61,26 +63,31 @@ def test_nonzero_exit_is_captured_not_raised():
 def test_empty_argv_raises_tool_not_found():
     # An empty argv would otherwise surface a bare IndexError from Popen; keep the
     # contract that callers only ever see this module's error types.
-    with pytest.raises(ToolNotFound):
+    with pytest.raises(ToolUnavailable):
         SubprocessRunner().run([])
 
 
 def test_non_executable_tool_raises_tool_not_found(tmp_path):
     # A file that exists but isn't executable raises PermissionError (EACCES) from
-    # exec, not FileNotFoundError. It must still translate to ToolNotFound so an
+    # exec, not FileNotFoundError. It must still translate to ToolUnavailable so an
     # unusable tool fails closed exactly like a missing one.
     tool = tmp_path / "not_exec"
     tool.write_text("#!/bin/sh\n")
     tool.chmod(0o644)  # readable but not executable
-    with pytest.raises(ToolNotFound):
+    with pytest.raises(ToolUnavailable) as excinfo:
         SubprocessRunner().run([str(tool)])
+    # A non-"missing" reason must not be hidden behind a bare "not found": the
+    # underlying OS error is kept and appended to the message.
+    assert isinstance(excinfo.value.cause, OSError)
+    assert str(excinfo.value.cause) in str(excinfo.value)
 
 
 def test_bad_path_component_raises_tool_not_found():
     # A path whose parent is a file, not a directory, raises NotADirectoryError
-    # (ENOTDIR) - another OSError subclass that must map to ToolNotFound.
-    with pytest.raises(ToolNotFound):
+    # (ENOTDIR) - another OSError subclass that must map to ToolUnavailable.
+    with pytest.raises(ToolUnavailable) as excinfo:
         SubprocessRunner().run(["/etc/hostname/nope"])
+    assert isinstance(excinfo.value.cause, OSError)
 
 
 def test_run_json_forwards_timeout_to_runner():

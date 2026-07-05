@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from drivetest.proc import ProcTimeout, ToolNotFound
+from drivetest.proc import ProcTimeout, ToolUnavailable
 
 from .conftest import Call, FakeRunner
 
@@ -23,11 +23,11 @@ def test_records_argv_input_and_timeout():
 
 
 def test_rule_can_raise_to_simulate_a_missing_tool():
-    # A missing tool surfaces as ToolNotFound, exactly like the real runner: a
+    # A missing tool surfaces as ToolUnavailable, exactly like the real runner: a
     # raw FileNotFoundError is translated, so callers test the type they see.
     runner = FakeRunner()
     runner.add("nvme", contains=["smart-log"], error=FileNotFoundError("nvme"))
-    with pytest.raises(ToolNotFound):
+    with pytest.raises(ToolUnavailable):
         runner.run(["nvme", "smart-log", "/dev/nvme0n1"])
     # the attempted call is still recorded
     assert runner.calls[-1].argv == ("nvme", "smart-log", "/dev/nvme0n1")
@@ -43,12 +43,14 @@ def test_rule_can_raise_to_simulate_a_timeout():
 
 def test_rule_can_raise_oserror_to_simulate_a_non_executable_tool():
     # A non-executable tool raises PermissionError (an OSError subclass) from the
-    # real runner and is translated to ToolNotFound; the fake must mirror that, so
+    # real runner and is translated to ToolUnavailable; the fake must mirror that, so
     # higher-layer tests see the same type production does.
     runner = FakeRunner()
     runner.add("smartctl", contains=["-x"], error=PermissionError("smartctl"))
-    with pytest.raises(ToolNotFound):
+    with pytest.raises(ToolUnavailable) as excinfo:
         runner.run(["smartctl", "-x", "/dev/sda"])
+    # the cause is preserved, mirroring the real runner
+    assert isinstance(excinfo.value.cause, PermissionError)
 
 
 def test_rules_tried_in_registration_order():

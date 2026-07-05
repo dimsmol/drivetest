@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from drivetest.proc import ProcTimeout, Result, ToolNotFound
+from drivetest.proc import ProcTimeout, Result, ToolUnavailable
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -62,7 +62,7 @@ class FakeRunner:
     Pass ``error=`` to make a matching rule raise instead of returning. Like the
     real :class:`drivetest.proc.SubprocessRunner`, a raw ``FileNotFoundError`` (or
     any other ``OSError``, e.g. a non-executable tool) is translated to
-    ``ToolNotFound`` and ``subprocess.TimeoutExpired`` to ``ProcTimeout`` before it
+    ``ToolUnavailable`` and ``subprocess.TimeoutExpired`` to ``ProcTimeout`` before it
     reaches the caller, so tests see exactly the exception types production code
     sees (callers never handle the raw stdlib exceptions). Any other ``error=`` is
     raised as-is. Every attempted call is recorded in
@@ -125,14 +125,14 @@ class FakeRunner:
         the same error types production callers see.
         """
         if isinstance(error, FileNotFoundError):
-            return ToolNotFound(argv)
+            return ToolUnavailable(argv, error)
         if isinstance(error, subprocess.TimeoutExpired):
             return ProcTimeout(argv, timeout)
         # A tool present but not executable (EACCES) or a bad path component
         # (ENOTDIR) is another OSError subclass; SubprocessRunner maps it to
-        # ToolNotFound too, so the fake must as well to stay faithful.
+        # ToolUnavailable too (carrying the cause), so the fake must as well.
         if isinstance(error, OSError):
-            return ToolNotFound(argv)
+            return ToolUnavailable(argv, error)
         return error
 
 
