@@ -39,11 +39,21 @@ Do this at swap time. Fit the SN850X, boot a **Linux live USB**; the drive is no
    sudo ./drivetest --quick --write /dev/nvme0n1   # slot + PCIe write path; expect ~7000 MB/s seq read
    ```
    Stage 1 already crc-verified a full write across every cell, and integrity is interface-independent (USB vs PCIe doesn't change what's stored). So this pass only needs to prove the things the enclosure couldn't: real NVMe speed and that the M.2 slot/contacts are good. `--quick` does that without spending a second full drive-write of endurance - the extended self-test below re-scans the whole media internally to cover the rest.
+
+   Check in the output:
+   - write/verify **PASS**, `err=0`, no `verify` mismatch.
+   - seq read **~7000 MB/s** (a few thousand, not ~1000; ~1 GB/s means it negotiated a bad PCIe link / poor contact - reseat).
+   - SMART diff clean: `Media and Data Integrity Errors: 0`, `Critical Warning: 0x00`, temp well under ~70 C.
 2. Built-in extended self-test (USB bridges can't pass this through):
    ```bash
    sudo nvme device-self-test /dev/nvme0n1 -s 2
-   sudo nvme self-test-log /dev/nvme0n1
+   sudo nvme self-test-log /dev/nvme0n1   # re-run to poll; takes minutes
    ```
+
+   Check in `self-test-log`:
+   - newest entry (`Self Test Result[0]`) reads **`Completed without error`** (result code `0`).
+   - `Current operation: 0x0` = finished; a non-zero `% Completed` means still running - poll again.
+   - any `Completed: ... failure` / non-zero result, or an `LBA`/`namespace` on a failed entry = bad media or slot; **abort the swap**.
 
 This confirms full performance and that the slot/contacts are good. Then clone/reinstall. **Keep the old drive untouched until Stage 2 passes.**
 
