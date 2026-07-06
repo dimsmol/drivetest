@@ -46,3 +46,28 @@ Do this at swap time. Fit the SN850X, boot a **Linux live USB**; the drive is no
    ```
 
 This confirms full performance and that the slot/contacts are good. Then clone/reinstall. **Keep the old drive untouched until Stage 2 passes.**
+
+## Real-world caveat: the Arion flaked mid-run
+
+During a Stage 1 `--write --parts 8` run, the enclosure got disconnected and started flaking after successfully write-testing parts 1-5 of 8:
+
+- On the initial USB port it dropped off the bus and then cycled endlessly (a stream of reconnects in `dmesg`).
+- On another port it appeared in `lsblk` under the same name (`sda`) and looked fine in `dmesg`, but was invisible to `smartctl`.
+- On yet another port it appeared in `lsblk` as `sdb`, SMART readable, but downgraded to low speed (`dmesg` confirmed a failed connect then reconnect in a different mode).
+
+The web confirms a history of similar flakiness with this enclosure - but other available options may have this problem too.
+
+The described effects were very stable on multiple attempts when using the same cable but could be different when connected with other cables or via different adapters (which is expected).
+
+What didn't help:
+
+- Unplugging the enclosure for a while.
+- Removing the drive from enclosure, waiting, inserting back.
+
+What helped:
+
+- Laptop power off and on again then use the same port as was originally used - connected fine on the first attempt.
+
+Possibly the host's xHCI/USB controller was latching - the "only works again after a reboot" pattern is a reported xHCI issue, not specific to this enclosure. A thing that could potentially help without rebooting (not tried) is rebinding the `xhci_hcd` PCI driver (`unbind` then `bind` under `/sys/bus/pci/drivers/xhci_hcd/`), which resets the whole controller.
+
+As a potential preventive cure, disabling USB autosuspend for the xHCI is a commonly reported fix for these wedges. It can be done e.g. with the `usbcore.autosuspend=-1` kernel parameter or (more surgically) by applying `services.udev.extraRules` doing the same for a specific enclosure device.
