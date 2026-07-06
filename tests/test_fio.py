@@ -12,6 +12,8 @@ import pytest
 
 from drivetest.config import DEFAULT_THERMAL_POLICY
 from drivetest.fio import (
+    _FIO_OUTPUT_END,
+    _FIO_OUTPUT_START,
     TERMINATE_GRACE_S,
     FioReadError,
     FioRunner,
@@ -33,6 +35,7 @@ POLICY = DEFAULT_THERMAL_POLICY
 
 
 # --- argv building --------------------------------------------------------
+
 
 def test_writeverify_argv_has_verify_and_region():
     argv = build_writeverify_argv("/dev/sdx", 1024, 2048)
@@ -70,6 +73,7 @@ def test_read_kind_label():
 
 # --- JSON parsing ---------------------------------------------------------
 
+
 def test_parse_seqread_json():
     stats = parse_read_json(load_json("fio_seqread.json"), ReadKind.SEQ)
     assert stats.kind is ReadKind.SEQ
@@ -103,11 +107,11 @@ def test_parse_read_json_raises_on_job_error():
 
 def test_parse_read_json_job_error_is_a_distinct_fioreaderror():
     # A real read failure raises FioReadError (a ValueError subclass), so the
-    # caller can tell it apart from merely-unparseable output and surface it.
+    # caller can tell it apart from merely-unparsable output and surface it.
     with pytest.raises(FioReadError):
         parse_read_json({"jobs": [{"error": 5, "read": {}}]}, ReadKind.SEQ)
     assert issubclass(FioReadError, ValueError)
-    # An unparseable/missing-figure result stays a plain ValueError, not FioReadError.
+    # An unparsable/missing-figure result stays a plain ValueError, not FioReadError.
     with pytest.raises(ValueError) as exc:
         parse_read_json({"jobs": [{"read": {"iops": 10}}]}, ReadKind.SEQ)
     assert not isinstance(exc.value, FioReadError)
@@ -143,6 +147,7 @@ def test_parse_read_json_raises_on_missing_iops():
 
 # --- region classification ------------------------------------------------
 
+
 def test_classify_region():
     assert classify_region(False, 0) is RegionResult.PASS
     assert classify_region(False, 1) is RegionResult.FAIL
@@ -151,6 +156,7 @@ def test_classify_region():
 
 
 # --- temperature monitor --------------------------------------------------
+
 
 def test_monitor_kills_on_ceiling_breach():
     # third sample reaches the ceiling and must trigger a kill
@@ -202,6 +208,7 @@ def test_monitor_ignores_unreadable_temps():
 
 
 # --- run_region cleanup on abnormal exit ----------------------------------
+
 
 class _FakeProc:
     """Minimal stand-in for a Popen fio process."""
@@ -284,7 +291,10 @@ def test_run_region_drains_all_output_before_closing_log_on_error(tmp_path):
     with pytest.raises(RuntimeError):
         runner.run_region("/dev/sdx", Region(1, 0, 1024), log)
     assert proc.terminated
-    assert log.read_text() == "line1\nline2\n"
+    # All streamed fio output lands (none lost to a closed sink); it trails the
+    # command header this module writes first. The monitor errored before fio's
+    # exit was known, so no exit line is appended.
+    assert log.read_text().endswith("line1\nline2\n")
 
 
 class _FinishingProc:
@@ -368,6 +378,7 @@ def test_run_region_fail_when_fio_exits_nonzero_while_cool(tmp_path):
 
 
 # --- body + tail coverage of a sub-MiB region -----------------------------
+
 
 class _RecordingPopen:
     """A ``popen`` stand-in that hands out queued procs and records each argv, so
@@ -455,6 +466,46 @@ def test_run_region_body_and_tail_output_share_one_log(tmp_path):
     assert "BODY-OUTPUT" in text and "TAIL-OUTPUT" in text
 
 
+def test_run_region_logs_command_and_exit_lines_fencing_fio_output_per_pass(tmp_path):
+    # Each pass records the exact argv, fences fio's own output, then records the
+    # exit code, so a region log is self-describing. A body+tail region yields two
+    # such blocks - one per fio invocation - keeping the tail pass covered too.
+    body = _FinishingProc(returncode=0, stdout="body-fio-output\n")
+    tail = _FinishingProc(returncode=0, stdout="tail-fio-output\n")
+    popen = _RecordingPopen([body, tail])
+    runner = _recording_runner(popen, tmp_path)
+    log = tmp_path / "f.log"
+    runner.run_region("/dev/sdx", Region(1, 0, 2 * MIB + 4096), log)
+    text = log.read_text()
+    # Two command lines (body + tail) and two exit lines, each carrying real args.
+    assert text.count("drivetest> command: fio ") == 2
+    assert text.count("drivetest> fio exited with code 0") == 2
+    assert "--bs=1M" in text and "--bs=4096" in text
+    # One output fence per pass, keeping fio's output clearly separated from ours.
+    assert text.count(_FIO_OUTPUT_START) == 2 and text.count(_FIO_OUTPUT_END) == 2
+    # The fences must not sit back-to-back where the body block meets the tail:
+    # the body's exit line and a blank separate them.
+    assert _FIO_OUTPUT_END + "\n" + _FIO_OUTPUT_START not in text
+    # Ordering per pass: command, then fenced fio output, then exit line.
+    assert (
+        text.index("drivetest> command")
+        < text.index(_FIO_OUTPUT_START)
+        < text.index("body-fio-output")
+        < text.index(_FIO_OUTPUT_END)
+        < text.index("drivetest> fio exited")
+    )
+
+
+def test_run_region_logs_nonzero_exit_line_on_failure(tmp_path):
+    # A failed pass still gets its exit line, so the log records the real code.
+    popen = _RecordingPopen([_FinishingProc(returncode=1, stdout="verify mismatch\n")])
+    runner = _recording_runner(popen, tmp_path)
+    log = tmp_path / "f.log"
+    result = runner.run_region("/dev/sdx", Region(1, 0, 4 * MIB), log)
+    assert result is RegionResult.FAIL
+    assert "drivetest> fio exited with code 1" in log.read_text()
+
+
 def test_run_region_rejects_nonpositive_size(tmp_path):
     # A zero-size region must fail closed, not fall through as a no-op PASS.
     popen = _RecordingPopen([])
@@ -496,7 +547,9 @@ def test_run_region_does_not_launch_fio_if_log_open_fails(tmp_path):
         return _FinishingProc(0)
 
     runner = FioRunner(
-        read_temp=lambda: 30, policy=POLICY, sleep=lambda _s: None,
+        read_temp=lambda: 30,
+        policy=POLICY,
+        sleep=lambda _s: None,
         popen=popen,  # type: ignore[arg-type]  # test fake stands in for Popen
         echo=lambda _line: None,
     )
@@ -521,6 +574,7 @@ def test_run_region_raises_when_output_drain_fails(tmp_path):
 
 # --- real fio integration (happy path) ------------------------------------
 
+
 @pytest.mark.fio
 @pytest.mark.skipif(shutil.which("fio") is None, reason="fio not installed")
 def test_run_region_writeverify_on_scratch_file(tmp_path):
@@ -529,10 +583,10 @@ def test_run_region_writeverify_on_scratch_file(tmp_path):
     log = tmp_path / "fio.log"
     sleep, _ = collect_sleep()
     runner = FioRunner(
-        read_temp=lambda: 30,          # always cool
+        read_temp=lambda: 30,  # always cool
         policy=POLICY,
         sleep=sleep,
-        popen=default_popen,           # the real subprocess, for this integration test
+        popen=default_popen,  # the real subprocess, for this integration test
         echo=lambda line: None,
     )
     result = runner.run_region(str(scratch), Region(1, 0, 8 * MIB), log)

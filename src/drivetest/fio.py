@@ -13,6 +13,7 @@ Two deliberately different output strategies (see the module design notes):
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import threading
 from collections.abc import Callable
@@ -40,6 +41,9 @@ DRAIN_JOIN_TIMEOUT_S = 30
 # Throughput is conventionally reported in decimal MB/s (10^6 B/s), distinct from
 # the binary MiB (2^20) used for sizes elsewhere.
 MB = 1_000_000
+
+_FIO_OUTPUT_START = "== [fio output start] " + "=" * 50
+_FIO_OUTPUT_END = "== [fio output end] " + "=" * 52
 
 
 class RegionResult(Enum):
@@ -331,6 +335,13 @@ class FioRunner:
             except Exception as exc:
                 drain_error.append(exc)
 
+        # Record the exact argv, then open the fence that wraps fio's own output.
+        # Safe to write here: no drain thread runs yet, so nothing else is touching
+        # the log. shlex.join quotes the argv into a copy-pasteable command line.
+        logf.write(f"drivetest> command: {shlex.join(argv)}\n")
+        logf.write(f"{_FIO_OUTPUT_START}\n")
+        logf.flush()
+
         proc = self._popen(argv)
         reader: threading.Thread | None = None
         # The finally runs before the caller closes the log, on every path (Ctrl-C,
@@ -358,7 +369,17 @@ class FioRunner:
         # fio has stopped and its output is drained; if the drainer could not keep
         # up or died, the log is untrustworthy - fail closed rather than classify.
         if reader is not None and reader.is_alive():
+            # The drain thread is still writing the log; do not append the exit
+            # line ourselves and race it - the timeout below is the real outcome.
             raise RuntimeError(f"fio output drain did not finish within {DRAIN_JOIN_TIMEOUT_S}s")
+        # Drain has finished, so we own the log again: close fio's output fence and
+        # record its exit code. Written whether the pass passed or failed, so every
+        # block is self-describing. The trailing blank line separates this block
+        # from the next pass's command line (body from tail, region from region).
+        logf.write(f"{_FIO_OUTPUT_END}\n")
+        logf.write(f"drivetest> fio exited with code {returncode}\n")
+        logf.write("\n")
+        logf.flush()
         if drain_error:
             raise drain_error[0]
         return classify_region(overheat, returncode)
