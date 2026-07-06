@@ -612,7 +612,10 @@ def test_write_only_covering_all_parts_is_not_flagged_partial(tmp_path):
     )
     code = run(_config("/dev/sda", write=True, assume_yes=True, parts=4, only="1-4"), ctx)
     assert code == EXIT_OK
-    assert len(launched) == 4  # all parts ran
+    # 5 fio passes: one each for parts 1-3, plus part 4 as a body + sub-MiB tail
+    # pass (the device size is not a whole multiple of parts x 1 MiB).
+    assert len(launched) == 5
+    assert "--bs=90112" in launched[-1]  # the trailing short block covers the tail
     summary = (tmp_path / "drive_test_TAD0NT005915_TEST" / "summary.log").read_text()
     assert "not the whole drive" not in summary
     assert "write/verify : PASS" in summary

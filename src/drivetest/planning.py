@@ -35,8 +35,10 @@ def plan_regions(dev_bytes: int, parts: int) -> list[Region]:
 
     The final region's size may therefore not be a whole MiB. That is fine: both
     ``dev_bytes`` (a device size) and every MiB-aligned offset are multiples of
-    the sector size, so the remainder is sector-aligned - fio writes full 1 MiB
-    blocks and a final short, still-sector-aligned block, valid under ``--direct``.
+    the sector size, so the remainder is sector-aligned. A 1 MiB fio job rounds
+    that sub-MiB tail away, so :meth:`FioRunner.run_region` writes it as a final
+    short, still-sector-aligned block (``bs`` = the remainder), keeping the whole
+    device covered under ``--direct``.
 
     The final region also absorbs the per-region rounding leftover, so it can be
     up to ``parts`` MiB larger than the rest. This is deliberate: it keeps every

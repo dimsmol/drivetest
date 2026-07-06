@@ -35,13 +35,22 @@ POLICY = DEFAULT_THERMAL_POLICY
 # --- argv building --------------------------------------------------------
 
 def test_writeverify_argv_has_verify_and_region():
-    argv = build_writeverify_argv("/dev/sdx", Region(3, 1024, 2048))
+    argv = build_writeverify_argv("/dev/sdx", 1024, 2048)
     assert "--verify=crc32c" in argv
     assert "--do_verify=1" in argv
     assert "--verify_fatal=1" in argv
     assert "--offset=1024" in argv
     assert "--size=2048" in argv
     assert "--filename=/dev/sdx" in argv
+    assert "--bs=1M" in argv  # default block size
+
+
+def test_writeverify_argv_uses_given_bs():
+    # The tail pass overrides the default 1 MiB block with the remainder size.
+    argv = build_writeverify_argv("/dev/sdx", 8192, 512, bs="512")
+    assert "--bs=512" in argv
+    assert "--offset=8192" in argv
+    assert "--size=512" in argv
 
 
 def test_read_argv_shapes():
@@ -358,6 +367,103 @@ def test_run_region_fail_when_fio_exits_nonzero_while_cool(tmp_path):
     assert not proc.terminated
 
 
+# --- body + tail coverage of a sub-MiB region -----------------------------
+
+class _RecordingPopen:
+    """A ``popen`` stand-in that hands out queued procs and records each argv, so
+    a test can assert how many fio invocations run and with what parameters.
+    """
+
+    def __init__(self, procs):
+        self._procs = list(procs)
+        self.argvs: list[list[str]] = []
+
+    def __call__(self, argv):
+        self.argvs.append(argv)
+        return self._procs.pop(0)
+
+
+def _recording_runner(popen, tmp_path):
+    return FioRunner(
+        read_temp=lambda: 30,  # cool: monitor never kills
+        policy=POLICY,
+        sleep=lambda _s: None,
+        popen=popen,  # type: ignore[arg-type]
+        echo=lambda _line: None,
+    )
+
+
+def test_run_region_single_pass_when_mib_aligned(tmp_path):
+    # A whole-MiB region is one fio pass at bs=1M - no tail.
+    popen = _RecordingPopen([_FinishingProc(returncode=0)])
+    runner = _recording_runner(popen, tmp_path)
+    result = runner.run_region("/dev/sdx", Region(1, 0, 4 * MIB), tmp_path / "f.log")
+    assert result is RegionResult.PASS
+    assert len(popen.argvs) == 1
+    assert "--bs=1M" in popen.argvs[0]
+    assert f"--size={4 * MIB}" in popen.argvs[0]
+
+
+def test_run_region_writes_body_then_tail_for_sub_mib_remainder(tmp_path):
+    # A region whose size is not a whole MiB runs as a 1 MiB body plus a final
+    # short block, so the sub-MiB tail (the last bytes of a device) is verified.
+    tail = 90112  # 88 KiB, sector-aligned - like a real end-of-drive remainder
+    region = Region(2, 5 * MIB, 3 * MIB + tail)
+    popen = _RecordingPopen([_FinishingProc(returncode=0), _FinishingProc(returncode=0)])
+    runner = _recording_runner(popen, tmp_path)
+    result = runner.run_region("/dev/sdx", region, tmp_path / "f.log")
+    assert result is RegionResult.PASS
+    assert len(popen.argvs) == 2
+    body, tail_argv = popen.argvs
+    assert "--bs=1M" in body
+    assert f"--offset={5 * MIB}" in body and f"--size={3 * MIB}" in body
+    # The tail starts right after the body and covers exactly the remainder in one IO.
+    assert f"--offset={5 * MIB + 3 * MIB}" in tail_argv
+    assert f"--size={tail}" in tail_argv and f"--bs={tail}" in tail_argv
+
+
+def test_run_region_tail_only_when_region_below_one_mib(tmp_path):
+    # A region smaller than a MiB has no body - just the tail pass covers it whole.
+    popen = _RecordingPopen([_FinishingProc(returncode=0)])
+    runner = _recording_runner(popen, tmp_path)
+    result = runner.run_region("/dev/sdx", Region(1, 0, 4096), tmp_path / "f.log")
+    assert result is RegionResult.PASS
+    assert len(popen.argvs) == 1
+    assert f"--size={4096}" in popen.argvs[0] and f"--bs={4096}" in popen.argvs[0]
+
+
+def test_run_region_body_failure_short_circuits_tail(tmp_path):
+    # A verify mismatch in the body must stop the region there - the tail never runs.
+    popen = _RecordingPopen([_FinishingProc(returncode=1)])  # body FAILs
+    runner = _recording_runner(popen, tmp_path)
+    result = runner.run_region("/dev/sdx", Region(2, 0, 3 * MIB + 90112), tmp_path / "f.log")
+    assert result is RegionResult.FAIL
+    assert len(popen.argvs) == 1  # tail skipped
+
+
+def test_run_region_body_and_tail_output_share_one_log(tmp_path):
+    # Both passes stream to the same open log; the tail must append, not truncate
+    # the body's output (a guard against a future refactor reopening the file).
+    body = _FinishingProc(returncode=0, stdout="BODY-OUTPUT\n")
+    tail = _FinishingProc(returncode=0, stdout="TAIL-OUTPUT\n")
+    popen = _RecordingPopen([body, tail])
+    runner = _recording_runner(popen, tmp_path)
+    log = tmp_path / "f.log"
+    result = runner.run_region("/dev/sdx", Region(1, 0, 2 * MIB + 4096), log)
+    assert result is RegionResult.PASS
+    text = log.read_text()
+    assert "BODY-OUTPUT" in text and "TAIL-OUTPUT" in text
+
+
+def test_run_region_rejects_nonpositive_size(tmp_path):
+    # A zero-size region must fail closed, not fall through as a no-op PASS.
+    popen = _RecordingPopen([])
+    runner = _recording_runner(popen, tmp_path)
+    with pytest.raises(ValueError):
+        runner.run_region("/dev/sdx", Region(1, 0, 0), tmp_path / "f.log")
+    assert len(popen.argvs) == 0  # no fio launched
+
+
 def test_run_region_escalates_to_sigkill_when_fio_ignores_sigterm(tmp_path):
     # A ceiling breach kills fio, but it ignores SIGTERM; _terminate must escalate
     # to SIGKILL rather than hang, and the region is classified OVERHEAT.
@@ -432,3 +538,26 @@ def test_run_region_writeverify_on_scratch_file(tmp_path):
     result = runner.run_region(str(scratch), Region(1, 0, 8 * MIB), log)
     assert result is RegionResult.PASS
     assert log.exists() and log.stat().st_size > 0
+
+
+@pytest.mark.fio
+@pytest.mark.skipif(shutil.which("fio") is None, reason="fio not installed")
+def test_run_region_writeverify_covers_sub_mib_tail_on_scratch_file(tmp_path):
+    # A region that is not a whole number of MiB: real fio must write+verify both
+    # the 1 MiB body and the trailing short block, so the whole region PASSes. This
+    # is the regression guard - a 1 MiB-only job silently drops this tail.
+    tail = 88 * KIB  # 90112 B, 512- and 4 KiB-aligned for --direct
+    size = 8 * MIB + tail
+    scratch = tmp_path / "scratch.bin"
+    scratch.write_bytes(b"\0" * size)
+    log = tmp_path / "fio.log"
+    sleep, _ = collect_sleep()
+    runner = FioRunner(
+        read_temp=lambda: 30,
+        policy=POLICY,
+        sleep=sleep,
+        popen=default_popen,
+        echo=lambda line: None,
+    )
+    result = runner.run_region(str(scratch), Region(1, 0, size), log)
+    assert result is RegionResult.PASS

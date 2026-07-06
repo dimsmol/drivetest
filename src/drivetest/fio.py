@@ -23,7 +23,7 @@ from typing import Any, TextIO, cast
 
 from .planning import Region
 from .thermal import Temp, ThermalPolicy, exceeds_ceiling
-from .units import KIB
+from .units import KIB, MIB
 
 # fio ETA options: force an ETA line every 30s even though stdout is captured
 # (fio would otherwise stay silent until done), on its own line so it streams.
@@ -97,23 +97,29 @@ class ReadStats:
         return self.bw_bytes / MB
 
 
-def build_writeverify_argv(dev_path: str, region: Region) -> list[str]:
-    """fio argv for a crc32c write+verify over one region (normal output)."""
+def build_writeverify_argv(dev_path: str, offset: int, size: int, bs: str = "1M") -> list[str]:
+    """fio argv for a crc32c write+verify over ``[offset, offset+size)`` (normal output).
+
+    ``bs`` is the block size, defaulting to 1 MiB for the bulk of a region. The
+    caller passes a smaller ``bs`` equal to the remainder for a region's sub-MiB
+    tail, which a 1 MiB job would otherwise round away (see
+    :meth:`FioRunner.run_region`).
+    """
     return [
         "fio",
         "--name=writeverify",
         f"--filename={dev_path}",
         "--ioengine=libaio",
         "--direct=1",
-        "--bs=1M",
+        f"--bs={bs}",
         "--iodepth=16",
         "--rw=write",
         "--verify=crc32c",
         "--do_verify=1",
         "--verify_fatal=1",
         "--verify_state_save=0",
-        f"--offset={region.offset}",
-        f"--size={region.size}",
+        f"--offset={offset}",
+        f"--size={size}",
         "--group_reporting",
         *ETA_OPTS,
     ]
@@ -265,13 +271,55 @@ class FioRunner:
     def run_region(self, dev_path: str, region: Region, log_path: Path) -> RegionResult:
         """Write+verify one region, streaming output to console and ``log_path``,
         while monitoring temperature and aborting at the ceiling.
-        """
-        argv = build_writeverify_argv(dev_path, region)
 
+        fio's 1 MiB job rounds a region's ``size`` down to a whole block, so a
+        sub-MiB tail (only the last region of a not-MiB-aligned device has one)
+        would go unwritten. To keep full-drive coverage the region runs as a
+        1 MiB-block *body* plus, when the size isn't a whole MiB, a final short
+        *tail* block (``bs`` = the sector-aligned remainder). Both stream to the
+        same log; the region PASSes only if every pass does, and an OVERHEAT/FAIL
+        on the body short-circuits the tail.
+        """
+        # A zero/negative region would produce no passes and fall through as a
+        # bogus PASS - report nothing rather than silently "verify" empty space.
+        # (plan_regions and quick_region already guarantee a positive size; this
+        # is a fail-closed guard against an upstream regression.)
+        if region.size <= 0:
+            raise ValueError(f"region {region.index} has non-positive size {region.size}")
+
+        body_size = region.size // MIB * MIB
+        tail_size = region.size - body_size
+        passes: list[tuple[int, int, str]] = []
+        if body_size:
+            passes.append((region.offset, body_size, "1M"))
+        if tail_size:
+            # A sub-MiB (but sector-aligned) trailing block, written whole so its
+            # bytes are verified too; ``bs`` = its exact size means one IO.
+            passes.append((region.offset + body_size, tail_size, str(tail_size)))
+
+        # Open the log *before* launching any fio: Popen begins writing the raw
+        # device immediately, so if the open failed after it we would leave a
+        # destructive write running with nothing draining or stopping it. The
+        # body and tail passes share the one open log.
+        with open(log_path, "w") as logf:
+            result = RegionResult.PASS
+            for offset, size, bs in passes:
+                result = self._run_argv(build_writeverify_argv(dev_path, offset, size, bs), logf)
+                if result is not RegionResult.PASS:
+                    break
+        return result
+
+    def _run_argv(self, argv: list[str], logf: TextIO) -> RegionResult:
+        """Run one fio invocation, draining its output to the already-open ``logf``
+        while the temperature monitor can kill it at the ceiling.
+
+        ``logf`` is opened by :meth:`run_region` (so it exists before fio starts
+        writing the device) and shared across a region's body/tail passes.
+        """
         # Drain fio's combined output in a thread so the main thread is free to
         # poll temperature and kill on a ceiling breach. Any error draining (e.g.
         # the log disk fills) is recorded, not swallowed: it means the evidence
-        # log is incomplete, so run_region must not report a PASS on it.
+        # log is incomplete, so the pass must not be reported as a PASS.
         drain_error: list[Exception] = []
 
         def drain(stream: TextIO, sink: TextIO) -> None:
@@ -283,35 +331,30 @@ class FioRunner:
             except Exception as exc:
                 drain_error.append(exc)
 
-        # Open the log *before* launching fio: Popen begins writing the raw device
-        # immediately, so if the open failed after it, we would leave a destructive
-        # write running with nothing draining or stopping it.
-        with open(log_path, "w") as logf:
-            proc = self._popen(argv)
-            reader: threading.Thread | None = None
-            # The finally runs before the log file closes, on every path (Ctrl-C,
-            # an error in the monitor, a kill): it stops fio - so we never leave a
-            # write running against the device - and only then joins the drain
-            # thread, so the thread can't write to a closed log (which would drop
-            # trailing output) and no line is lost.
-            try:
-                assert proc.stdout is not None
-                reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
-                reader.start()
-                overheat = monitor_region(
-                    is_alive=lambda: proc.poll() is None,
-                    read_temp=self._read_temp,
-                    policy=self._policy,
-                    sleep=self._sleep,
-                    kill=lambda: self._terminate(proc),
-                    on_sample=self._on_sample,
-                )
-                returncode = proc.wait()
-            finally:
-                if proc.poll() is None:
-                    self._terminate(proc)
-                if reader is not None:
-                    reader.join(DRAIN_JOIN_TIMEOUT_S)
+        proc = self._popen(argv)
+        reader: threading.Thread | None = None
+        # The finally runs before the caller closes the log, on every path (Ctrl-C,
+        # an error in the monitor, a kill): it stops fio - so we never leave a
+        # write running against the device - and only then joins the drain thread,
+        # so the thread can't write to a closed log (dropping trailing output).
+        try:
+            assert proc.stdout is not None
+            reader = threading.Thread(target=drain, args=(proc.stdout, logf), daemon=True)
+            reader.start()
+            overheat = monitor_region(
+                is_alive=lambda: proc.poll() is None,
+                read_temp=self._read_temp,
+                policy=self._policy,
+                sleep=self._sleep,
+                kill=lambda: self._terminate(proc),
+                on_sample=self._on_sample,
+            )
+            returncode = proc.wait()
+        finally:
+            if proc.poll() is None:
+                self._terminate(proc)
+            if reader is not None:
+                reader.join(DRAIN_JOIN_TIMEOUT_S)
         # fio has stopped and its output is drained; if the drainer could not keep
         # up or died, the log is untrustworthy - fail closed rather than classify.
         if reader is not None and reader.is_alive():
